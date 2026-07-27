@@ -1,7 +1,6 @@
 process FETCH_SRA {
     tag { "${strain_id} - ${accession}" }
-    cpus 2
-    memory 4.GB
+    label 'base'
 
     errorStrategy { task.exitStatus in [1, 143, 137, 255] ? 'retry' : 'finish' }
     maxRetries 3
@@ -10,44 +9,65 @@ process FETCH_SRA {
     tuple val(strain_id), val(accession)
 
     output:
-    tuple val(strain_id), path("${accession}_1.fastq.gz"), path("${accession}_2.fastq.gz")
+    tuple val(strain_id), val(accession), path("${accession}_1.fastq.gz"), path("${accession}_2.fastq.gz")
 
     script:
+    // Validate in Groovy (safe), not bash regex
+    if( !(accession ==~ /^[A-Z]{3}\d{6,8}$/) ) {
+        error "Invalid accession format: ${accession}"
+    }
+
+    def len = accession.size()
+    def accPrefix = accession[0..5]
+
+    def subdir = ''
+    if (len == 9) {
+        subdir = ''
+    } else if (len == 10) {
+        subdir = "00${accession[-1]}"
+    } else if (len == 11) {
+        subdir = "0${accession[-2..-1]}"
+    } else if (len == 12) {
+        subdir = accession[-3..-1]
+    } else {
+        error "Unsupported accession length for ${accession}"
+    }
+
+    def baseUrl = subdir ?
+        "https://ftp.sra.ebi.ac.uk/vol1/fastq/${accPrefix}/${subdir}/${accession}" :
+        "https://ftp.sra.ebi.ac.uk/vol1/fastq/${accPrefix}/${accession}"
+
     """
-    LEN=\$(echo -n "${accession}" | wc -c)
-    ACC_PREFIX=\$(echo "${accession}" | cut -c 1-6)
+    set -euo pipefail
 
-    if [ \$LEN -eq 9 ]; then
-        BASE_URL="https://ftp.sra.ebi.ac.uk/vol1/fastq/\${ACC_PREFIX}/${accession}"
-    elif [ \$LEN -eq 10 ]; then
-        SUBDIR="00\$(echo "${accession}" | tail -c 2)"
-        BASE_URL="https://ftp.sra.ebi.ac.uk/vol1/fastq/\${ACC_PREFIX}/\${SUBDIR}/${accession}"
-    elif [ \$LEN -eq 11 ]; then
-        SUBDIR="0\$(echo "${accession}" | tail -c 3)"
-        BASE_URL="https://ftp.sra.ebi.ac.uk/vol1/fastq/\${ACC_PREFIX}/\${SUBDIR}/${accession}"
-    else
-        SUBDIR="\$(echo "${accession}" | tail -c 4)"
-        BASE_URL="https://ftp.sra.ebi.ac.uk/vol1/fastq/\${ACC_PREFIX}/\${SUBDIR}/${accession}"
-    fi
+    CURL_OPTS="-f -L --retry 5 --retry-delay 2 --retry-max-time 60"
 
-    CURL_OPTS="-# --retry 5 --retry-delay 2 --retry-max-time 60 -L"
-
-    echo "Downloading ${accession}_1.fastq.gz & ${accession}_2.fastq.gz..."
-    curl \$CURL_OPTS "\${BASE_URL}/${accession}_1.fastq.gz" -o "${accession}_1.fastq.gz" &
+    echo "Downloading ${accession}_1.fastq.gz and ${accession}_2.fastq.gz ..."
+    curl \$CURL_OPTS "${baseUrl}/${accession}_1.fastq.gz" -o "${accession}_1.fastq.gz" &
     PID1=\$!
-    curl \$CURL_OPTS "\${BASE_URL}/${accession}_2.fastq.gz" -o "${accession}_2.fastq.gz" &
+    curl \$CURL_OPTS "${baseUrl}/${accession}_2.fastq.gz" -o "${accession}_2.fastq.gz" &
     PID2=\$!
 
-    wait \$PID1 \$PID2
+    wait "\$PID1"; S1=\$?
+    wait "\$PID2"; S2=\$?
+
+    if [ "\$S1" -ne 0 ] || [ "\$S2" -ne 0 ]; then
+        echo "Download failed for ${accession}: R1 status=\$S1, R2 status=\$S2" >&2
+        exit 4
+    fi
+
+    test -s "${accession}_1.fastq.gz"
+    test -s "${accession}_2.fastq.gz"
+    gzip -t "${accession}_1.fastq.gz"
+    gzip -t "${accession}_2.fastq.gz"
     """
 }
 
 process MERGE_RAW {
     tag { "${strain_id}" }
-    cpus 2
-    memory 4.GB
+    label 'base'
 
-    publishDir path: { "results/strains/${strain_id}" }, mode: 'copy'
+    publishDir path: { "${params.outdir}/strains/${strain_id}" }, mode: 'copy'
 
     input:
     tuple val(strain_id), path(r1_files), path(r2_files)
@@ -57,17 +77,17 @@ process MERGE_RAW {
 
     script:
     """
-    echo "=== Merging run FASTQs for strain: ${strain_id} ==="
-    cat ${r1_files} > "${strain_id}_R1.fastq.gz"
-    cat ${r2_files} > "${strain_id}_R2.fastq.gz"
-
+    set -euo pipefail
+    cat ${r1_files.join(' ')} > "${strain_id}_R1.fastq.gz"
+    cat ${r2_files.join(' ')} > "${strain_id}_R2.fastq.gz"
     gzip -t "${strain_id}_R1.fastq.gz"
     gzip -t "${strain_id}_R2.fastq.gz"
     """
 }
 
 process CREATE_STRAIN_LIST {
-    publishDir path: { "results" }, mode: 'copy'
+    label 'tiny'
+    publishDir path: "${params.outdir}", mode: 'copy'
 
     input:
     val strain_ids
@@ -76,8 +96,14 @@ process CREATE_STRAIN_LIST {
     path "strains.txt"
 
     script:
-    def list_str = strain_ids.unique().join("\n")
+    def cleaned = strain_ids.collect { sid -> sid.toString().trim() }
+                            .findAll { sid -> sid }
+                            .unique()
+                            .sort()
+    def list_str = cleaned.join('\n')
     """
-    echo "${list_str}" > strains.txt
+    cat > strains.txt << 'EOF'
+    ${list_str}
+    EOF
     """
 }

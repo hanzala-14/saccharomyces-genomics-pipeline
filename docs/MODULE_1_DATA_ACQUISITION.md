@@ -1,22 +1,25 @@
 # 📖 Module 1: Data Acquisition & Strain Aggregation
 
-* **Module Source:** `modules/download_raw.nf`
+* **Module Source:** [`modules/download_raw.nf`](../modules/download_raw.nf)
+* **Workflow Source:** [`main.nf`](../main.nf)
+* **Pipeline Configuration:** [`nextflow.config`](../nextflow.config)
 * **Pipeline Version:** `1.0.0`
-* **Author:** Nextflow Workflow Maintainer
-* **Last Updated:** 22 July 2026
+* **Last Updated:** 27 July 2026
 
 ---
 
 ## 1. Overview & Purpose
 
-Module 1 handles the automated ingestion of biological sequence metadata, parallel retrieval of raw paired-end FASTQ datasets from European Nucleotide Archive (ENA) mirrors, aggregation of run-level files by biological strain, and generation of run inventory manifests.
+Module 1 performs ingestion of sequencing metadata from `samplesheet.csv`, parallel retrieval of paired-end FASTQ files from ENA, strain-level aggregation of multi-run data, and generation of a deduplicated strain manifest for downstream modules.
 
 ### Key Objectives
 
-* **Parallel Acquisition:** Download forward (`_1`) and reverse (`_2`) reads concurrently per SRA accession.
-* **Strain-Level Concatenation:** Combine multiple run accessions associated with a single strain identifier into unified FASTQ pairs.
-* **Integrity Validation:** Perform archive verification (`gzip -t`) prior to publishing outputs.
-* **Manifest Generation:** Generate a clean, deduplicated list of processed strains (`strains.txt`) for downstream processing.
+* **Strict input checks:** enforce required CSV headers and non-empty values.
+* **Accession validation:** reject malformed run IDs before download.
+* **Parallel acquisition:** download `_1` and `_2` reads concurrently with HTTP failure handling (`curl -f`).
+* **Deterministic merging:** sort runs by accession before concatenation.
+* **Integrity verification:** run `gzip -t` on merged outputs before publishing.
+* **Manifest generation:** write deduplicated, sorted `strains.txt`.
 
 ---
 
@@ -24,36 +27,37 @@ Module 1 handles the automated ingestion of biological sequence metadata, parall
 
 ```mermaid
 flowchart TD
-    subgraph Input Processing
-        A[samplesheet.csv] -->|Parse Rows| B[Channel: samples_ch]
-    end
-
-    subgraph Module 1: download_raw.nf
-        B -->|tuple: strain_id, accession| C[FETCH_SRA]
-        C -->|tuple: strain_id, acc_1.fq.gz, acc_2.fq.gz| D[groupTuple by strain_id]
-        D -->|tuple: strain_id, List r1, List r2| E[MERGE_RAW]
-        E -->|tuple: strain_id, R1.fq.gz, R2.fq.gz| F[CREATE_STRAIN_LIST]
-    end
-
-    subgraph Output Publishing
-        E -->|Publish| G[results/strains/strain_id/]
-        F -->|Publish| H[results/strains.txt]
-    end
-
+    A[samplesheet.csv] -->|parse + validate| B[samples_ch]
+    B --> C[FETCH_SRA]
+    C -->|tuple: strain_id, accession, r1, r2| D[group + sort by accession]
+    D --> E[MERGE_RAW]
+    E -->|merged_reads| F[CREATE_STRAIN_LIST]
+    E --> G[results/strains/<strain_id>/]
+    F --> H[results/strains.txt]
 ```
 
 ---
 
 ## 3. Input & Output Data Contracts
 
-### 3.1 Input Channel Schema (`samplesheet.csv`)
+### 3.1 Input schema (`samplesheet.csv`)
 
-| Column Header | Data Type | Required | Description | Example |
-| --- | --- | --- | --- | --- |
-| `strain_id` | `String` | **Yes** | Biological strain/sample identifier | `WLP830` |
-| `accession` | `String` | **Yes** | SRA/ENA Run Accession Number | `SRR10047172` |
+| Column Header | Type | Required | Validation |
+|---|---|---|---|
+| `strain_id` | String | Yes | Non-empty; sanitized to `[A-Za-z0-9_.-]` for stable naming |
+| `accession` | String | Yes | Must match `^[A-Z]{3}[0-9]{6,8}$` |
 
-### 3.2 Output Directory Structure
+Example:
+
+```csv
+strain_id,accession
+yHCT81-Peris,SRR2586163
+yHCT81-Peris,SRR2586164
+WY2007,SRR10047095
+WLP830,SRR10047173
+```
+
+### 3.2 Output structure
 
 ```text
 results/
@@ -65,185 +69,65 @@ results/
     └── <strain_id_2>/
         ├── <strain_id_2>_R1.fastq.gz
         └── <strain_id_2>_R2.fastq.gz
-
 ```
 
 ---
 
-## 4. Detailed Process Specifications
+## 4. Process Specifications
 
-### 4.1 Process: `FETCH_SRA`
+> Resources are assigned via labels in `nextflow.config`.
 
-Fetches individual FASTQ run files from ENA's FTP mirror using direct dynamic URL pathing.
+### 4.1 `FETCH_SRA`
 
-```nextflow
-process FETCH_SRA {
-    tag { "${strain_id} - ${accession}" }
-    cpus 2
-    memory 4.GB
+Downloads paired FASTQ files per accession from ENA.
 
-    errorStrategy { task.exitStatus in [1, 143, 137, 255] ? 'retry' : 'finish' }
-    maxRetries 3
-
-    input:
-    tuple val(strain_id), val(accession)
-
-    output:
-    tuple val(strain_id), path("${accession}_1.fastq.gz"), path("${accession}_2.fastq.gz")
-}
-
-```
-
-* **Execution Directives:**
-* **Threads:** 2 CPUs
-* **Memory Allocation:** 4 GB
-* **Retry Policy:** Automatic retry on network timeout/disconnect (Exit Codes: 1, 137, 143, 255). Up to 3 attempts.
-
-
-* **Terminal Display Format:** `FETCH_SRA (WLP830 - SRR10047172)`
+* **Label:** `base`
+* **Input:** `tuple val(strain_id), val(accession)`
+* **Output:** `tuple val(strain_id), val(accession), path("${accession}_1.fastq.gz"), path("${accession}_2.fastq.gz")`
+* **Behavior:**
+  * validates accession format
+  * builds ENA path from accession length
+  * concurrent `curl` downloads
+  * explicit failure checks + gzip integrity checks
 
 ---
 
-### 4.2 Process: `MERGE_RAW`
+### 4.2 `MERGE_RAW`
 
-Concatenates all run-level FASTQ files for a given strain and verifies archive integrity.
+Merges all run FASTQs for each strain after deterministic sorting by accession.
 
-```nextflow
-process MERGE_RAW {
-    tag { "${strain_id}" }
-    cpus 2
-    memory 4.GB
-
-    publishDir path: { "results/strains/${strain_id}" }, mode: 'copy'
-
-    input:
-    tuple val(strain_id), path(r1_files), path(r2_files)
-
-    output:
-    tuple val(strain_id), path("${strain_id}_R1.fastq.gz"), path("${strain_id}_R2.fastq.gz"), emit: merged_reads
-}
-
-```
-
-* **Execution Directives:**
-* **Threads:** 2 CPUs
-* **Memory Allocation:** 4 GB
-* **Publish Path:** `results/strains/${strain_id}/`
-
-
-* **Integrity Guarantee:** Executes `gzip -t` on final concatenated files. If corruption is detected, the process throws a non-zero exit code to halt downstream tasks.
+* **Label:** `base`
+* **Input:** `tuple val(strain_id), path(r1_files), path(r2_files)`
+* **Output:** `tuple val(strain_id), path("${strain_id}_R1.fastq.gz"), path("${strain_id}_R2.fastq.gz")`
+* **Publish:** `${params.outdir}/strains/${strain_id}` (`mode: 'copy'`)
 
 ---
 
-### 4.3 Process: `CREATE_STRAIN_LIST`
+### 4.3 `CREATE_STRAIN_LIST`
 
-Generates a master plain-text record of all uniquely processed strain IDs.
+Creates deduplicated sorted strain manifest.
 
-```nextflow
-process CREATE_STRAIN_LIST {
-    publishDir path: { "results" }, mode: 'copy'
-
-    input:
-    val strain_ids
-
-    output:
-    path "strains.txt"
-}
-
-```
-
-* **Execution Directives:**
-* **Publish Path:** `results/strains.txt`
-
-
+* **Label:** `tiny`
+* **Input:** `val strain_ids`
+* **Output:** `path "strains.txt"`
+* **Publish:** `${params.outdir}` (`mode: 'copy'`)
 
 ---
 
-## 5. Module Source Code (`modules/download_raw.nf`)
+## 5. Reproducibility Notes
 
-```nextflow
-process FETCH_SRA {
-    tag { "${strain_id} - ${accession}" }
-    cpus 2
-    memory 4.GB
+* Run-order nondeterminism is controlled by explicit accession-based sorting before merge.
+* Output integrity is enforced with `gzip -t`.
+* Recommended execution command:
 
-    errorStrategy { task.exitStatus in [1, 143, 137, 255] ? 'retry' : 'finish' }
-    maxRetries 3
-
-    input:
-    tuple val(strain_id), val(accession)
-
-    output:
-    tuple val(strain_id), path("${accession}_1.fastq.gz"), path("${accession}_2.fastq.gz")
-
-    script:
-    """
-    LEN=\$(echo -n "${accession}" | wc -c)
-    ACC_PREFIX=\$(echo "${accession}" | cut -c 1-6)
-
-    if [ \$LEN -eq 9 ]; then
-        BASE_URL="https://ftp.sra.ebi.ac.uk/vol1/fastq/\${ACC_PREFIX}/${accession}"
-    elif [ \$LEN -eq 10 ]; then
-        SUBDIR="00\$(echo "${accession}" | tail -c 2)"
-        BASE_URL="https://ftp.sra.ebi.ac.uk/vol1/fastq/\${ACC_PREFIX}/\${SUBDIR}/${accession}"
-    elif [ \$LEN -eq 11 ]; then
-        SUBDIR="0\$(echo "${accession}" | tail -c 3)"
-        BASE_URL="https://ftp.sra.ebi.ac.uk/vol1/fastq/\${ACC_PREFIX}/\${SUBDIR}/${accession}"
-    else
-        SUBDIR="\$(echo "${accession}" | tail -c 4)"
-        BASE_URL="https://ftp.sra.ebi.ac.uk/vol1/fastq/\${ACC_PREFIX}/\${SUBDIR}/${accession}"
-    fi
-
-    CURL_OPTS="-# --retry 5 --retry-delay 2 --retry-max-time 60 -L"
-
-    echo "Downloading ${accession}_1.fastq.gz & ${accession}_2.fastq.gz..."
-    curl \$CURL_OPTS "\${BASE_URL}/${accession}_1.fastq.gz" -o "${accession}_1.fastq.gz" &
-    PID1=\$!
-    curl \$CURL_OPTS "\${BASE_URL}/${accession}_2.fastq.gz" -o "${accession}_2.fastq.gz" &
-    PID2=\$!
-
-    wait \$PID1 \$PID2
-    """
-}
-
-process MERGE_RAW {
-    tag { "${strain_id}" }
-    cpus 2
-    memory 4.GB
-
-    publishDir path: { "results/strains/${strain_id}" }, mode: 'copy'
-
-    input:
-    tuple val(strain_id), path(r1_files), path(r2_files)
-
-    output:
-    tuple val(strain_id), path("${strain_id}_R1.fastq.gz"), path("${strain_id}_R2.fastq.gz"), emit: merged_reads
-
-    script:
-    """
-    echo "=== Merging run FASTQs for strain: ${strain_id} ==="
-    cat ${r1_files} > "${strain_id}_R1.fastq.gz"
-    cat ${r2_files} > "${strain_id}_R2.fastq.gz"
-
-    gzip -t "${strain_id}_R1.fastq.gz"
-    gzip -t "${strain_id}_R2.fastq.gz"
-    """
-}
-
-process CREATE_STRAIN_LIST {
-    publishDir path: { "results" }, mode: 'copy'
-
-    input:
-    val strain_ids
-
-    output:
-    path "strains.txt"
-
-    script:
-    def list_str = strain_ids.unique().join("\n")
-    """
-    echo "${list_str}" > strains.txt
-    """
-}
-
+```bash
+nextflow run main.nf -resume
 ```
+
+---
+
+## 6. Source of Truth
+
+* [`modules/download_raw.nf`](../modules/download_raw.nf)
+* [`main.nf`](../main.nf)
+* [`nextflow.config`](../nextflow.config)
