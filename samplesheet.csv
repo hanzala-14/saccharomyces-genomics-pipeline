@@ -1,5 +1,5 @@
-strain_id,accession
-yHCT81-Peris,SRR2586163
-yHCT81-Peris,SRR2586164
-WY2007,SRR10047095
-WLP830,SRR10047173
+strain_id,accession,r1,r2
+ABC,SRR1122334,,
+ABC,,data/raw/ABC.R1.filt.fastq.gz,data/raw/ABC.R2.filt.fastq.gz
+DEF,,data/raw/DEF.R1.filt.fastq.gz,data/raw/DEF.R2.filt.fastq.gz
+DEF,SRR1122335,,
