@@ -8,7 +8,7 @@
 * **Workflow Source:** `main.nf`
 * **Pipeline Configuration:** `nextflow.config`
 * **Pipeline Version:** `2.1.3`
-* **Last Updated:** `05 August 2026`
+* **Last Updated:** `02 August 2026`
 
 ---
 
@@ -19,7 +19,7 @@ Module 3 takes the quality-filtered FASTQs from Module 2, aligns them to a refer
 It handles:
 
 1. Reference genome acquisition (local FASTA or automated fallback via NCBI Assembly accession).
-2. Reference indexing (`bwa index`, `samtools faidx`, Picard sequence dictionary creation).
+2. Reference indexing (`bwa index`).
 3. Paired-end (`MAP_PE`) and single-end (`MAP_SE`) read mapping using `bwa mem` piped directly into `samtools view` and `samtools sort` to eliminate intermediate disk I/O bottlenecks.
 4. Read group (`@RG`) injection per run to ensure compatibility with downstream variant callers (e.g., GATK).
 5. High-performance duplicate marking using a pure-samtools pipeline (`collate` $\rightarrow$ `fixmate` $\rightarrow$ `sort` $\rightarrow$ `markdup`), bypassing heavy Java/Picard memory overhead.
@@ -52,6 +52,20 @@ Every mapping process verifies output integrity. Tasks that produce empty BAM fi
 
 Post-alignment QC metrics are harvested into a single cohort-wide `mapping_summary.tsv`, making it straightforward to audit total reads, mapping percentages, duplicate rates, and insert sizes at a glance.
 
+### 2.6 Reference Handling & The `save_reference` Toggle
+
+The pipeline supports two modes for acquiring a reference genome:
+
+1. **Local Mode:** Pointing `params.reference` to an existing local `.fasta` file.
+2. **NCBI Fetch Mode:** Providing an NCBI assembly accession via `params.genome_id` to automatically download the genome.
+
+Regardless of the mode, the pipeline automatically detects missing BWA indices and generates them.
+
+**The `save_reference` Parameter:**
+
+* **If `false` (Default):** The pipeline builds the indices in the temporary Nextflow work directory and deletes them after the run. This saves disk space and is recommended when using a local reference.
+* **If `true`:** The pipeline publishes the `.fasta` and its generated BWA index bundle (`.bwt`, `.pac`, `.sa`, etc.) into `results/reference/`. This is highly recommended when using `genome_id` to fetch a new genome from NCBI, as it allows you to permanently save the indexed reference bundle for future local pipeline runs. *(Note: `.dict` and `.fai` files are generated later in Module 5).*
+
 ---
 
 ## 3) Input Contract
@@ -82,12 +96,12 @@ Post-alignment QC metrics are harvested into a single cohort-wide `mapping_summa
 
 ### 4.2 `BWA_INDEX`
 
-**Role:** Build indexes required for alignment and downstream analyses.
+**Role:** Build BWA indices required for alignment.
 
 * **Label:** `medium`
 * **Input:** `path(fasta)`
 * **Output:** `tuple path(fasta), path("${fasta}.*")`
-* **Actions:** Executes `bwa index`, `samtools faidx`, and Picard `CreateSequenceDictionary`.
+* **Actions:** Executes `bwa index`.
 
 ### 4.3 `MAP_PE` & `MAP_SE`
 
@@ -164,11 +178,10 @@ params {
 
 ```text
 results/
-├── reference/
+├── reference/                  # Populated ONLY if save_reference = true
 │   ├── *.fasta
 │   ├── *.fasta.bwt
-│   ├── *.fasta.fai
-│   └── *.fasta.dict
+│   └── *.fasta.pac             # (and other BWA index files)
 └── mapped/
     ├── mapping_summary.tsv
     ├── strains/
@@ -193,7 +206,6 @@ results/
 | --- | --- | --- |
 | BWA | 0.7.19 | Maximal Exact Match (MEM) read alignment |
 | Samtools | 1.24 | BAM sorting, viewing, indexing, and duplicate marking |
-| Picard | 3.5.0 | Sequence dictionary generation (`CreateSequenceDictionary`) |
 
 ---
 

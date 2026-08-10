@@ -8,7 +8,7 @@
 * **Workflow Source:** `main.nf`
 * **Pipeline Configuration:** `nextflow.config`
 * **Pipeline Version:** `2.1.2`
-* **Last Updated:** `05 August 2026`
+* **Last Updated:** `02 August 2026`
 
 
 ---

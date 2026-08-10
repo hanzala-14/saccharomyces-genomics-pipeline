@@ -8,8 +8,8 @@
 * **Workflow Source:** `main.nf`
 * **Pipeline Configuration:** `nextflow.config`
 * **Companion Naming/Contract Doc:** `MODULE_1_INPUT_NAMING_AND_CONTRACTS.md`
-* **Pipeline Version:** `2.1.0`
-* **Last Updated:** `05 August 2026`
+* **Pipeline Version:** `2.1.1`
+* **Last Updated:** `01 August 2026`
 
 ---
 

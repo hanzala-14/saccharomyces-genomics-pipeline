@@ -13,7 +13,7 @@ Reference genome:
   - Local FASTA (params.reference) — preferred
   - Auto-fetch from NCBI (params.genome_id) — fallback if no local ref
 
-Robustness features:
+Features:
   - Piped bwa->view->sort (no intermediate SAM/BAM on disk)
   - Pre-indexed reference detection (skips BWA index if .bwt exists)
   - Post-mapping non-empty BAM validation

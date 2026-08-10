@@ -31,6 +31,18 @@ include {
     COMPUTE_COVERAGE
 } from './modules/coverage.nf'
 
+include {
+    PREPARE_GATK_REF
+    HAPLOTYPE_CALLER
+    GATHER_STRAIN_GVCFS
+} from './modules/haplotype_calling.nf'
+
+include {
+    GENOMICSDB_IMPORT
+    GENOTYPE_GVCFS
+    MERGE_VCFS
+} from './modules/joint_genotyping.nf'
+
 workflow {
 
     // =========================================================================
@@ -277,4 +289,98 @@ workflow {
             file(params.sliding_windows, checkIfExists: true)
         )
     }
+
+    // =========================================================================
+    // MODULE 5: Variant Calling (GATK HaplotypeCaller)
+    // =========================================================================
+    
+    // Extract just the FASTA from Module 3's reference channel
+    gatk_fasta_ch = indexed_reference.map { fasta, _idx -> fasta }
+
+    // Prepare the exact .fai and .dict bundle GATK needs
+    PREPARE_GATK_REF(gatk_fasta_ch)
+
+    // Dynamically extract all chromosome names directly from the FASTA index (.fai)
+    // and filter based on the extrachromosomal master switch
+    chromosomes_ch = PREPARE_GATK_REF.out.gatk_ref
+        .map { _fasta, fai, _dict -> fai }
+        .splitCsv(sep: '\t')
+        .map { row -> row[0] }
+        .filter { chrom -> 
+            if (!params.include_extrachromosomal) {
+                // Drop any chromosome ending in _M or _P if the switch is false
+                return !(chrom.endsWith('_M') || chrom.endsWith('_P'))
+            }
+            return true
+        }
+
+    // Scatter: 1 BAM × N Chromosomes 
+    hc_input = MARKDUP.out.markdup_bam.combine(chromosomes_ch)
+
+    // params.ploidy_map is read internally in the module
+    HAPLOTYPE_CALLER(
+        hc_input, 
+        PREPARE_GATK_REF.out.gatk_ref.collect()
+    )
+
+    // Gather: Group outputs by strain_id and generate manifest
+    GATHER_STRAIN_GVCFS(HAPLOTYPE_CALLER.out.gvcf.groupTuple(by: 0))
+
+    // =========================================================================
+    // MODULE 6: JOINT GENOTYPING
+    // =========================================================================
+    
+    // Group Module 5 output by chromosome
+    ch_for_genomicsdb = HAPLOTYPE_CALLER.out.gvcf
+    .map { _strain_id, chrom, gvcf, tbi -> tuple(chrom, gvcf, tbi) }    
+    .groupTuple(by: 0)
+
+    // 6A: Build or Update the Database
+    GENOMICSDB_IMPORT(
+        ch_for_genomicsdb,
+        params.genomicsdb_update_path ?: ""
+    )
+
+    // 6B: Call the final variants using the Database from 6A
+    GENOTYPE_GVCFS(
+        GENOMICSDB_IMPORT.out.db,
+        PREPARE_GATK_REF.out.gatk_ref.collect()
+    )
+    
+    // 6C: Intelligent Subgenome Merging (Sensu Stricto Universal)
+    if (params.merge_strategy == 'separate') {
+        ch_for_merge = GENOTYPE_GVCFS.out.cohort_vcf
+            .map { chrom, vcf, tbi -> 
+                // Split the chromosome name by the underscore
+                def parts = chrom.tokenize('_')
+                def prefix = parts[0]
+                def suffix = parts.size() > 1 ? parts[1] : ""
+                
+                // 1. Map the prefix to the species name
+                def species_name = params.species_map.get(prefix, "${prefix}_other")
+                def final_prefix = species_name // Default to bundled
+                
+                // 2. Apply the extrachromosomal isolation logic if requested
+                if (params.extrachromosomal_strategy == 'isolated') {
+                    if (suffix.startsWith('M')) {
+                        final_prefix = "${species_name}_mitochondria"
+                    } else if (suffix.startsWith('P')) {
+                        final_prefix = "${species_name}_plasmid"
+                    } else {
+                        final_prefix = "${species_name}_nuclear"
+                    }
+                }
+                
+                tuple(final_prefix, vcf, tbi)
+            }
+            .groupTuple(by: 0)
+    } else {
+        // Group all chromosomes together under one name
+        ch_for_merge = GENOTYPE_GVCFS.out.cohort_vcf
+            .map { _chrom, vcf, tbi -> tuple('sensu_stricto_combined', vcf, tbi) }
+            .groupTuple(by: 0)
+    }
+
+    // Pass the intelligently grouped channel to Picard
+    MERGE_VCFS(ch_for_merge)
 }

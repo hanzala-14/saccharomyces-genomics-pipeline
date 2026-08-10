@@ -8,7 +8,7 @@
  *   MERGE_PE  → (strain_id, PE_R1.fastq.gz, PE_R2.fastq.gz)
  *   MERGE_SE  → (strain_id, SE.fastq.gz)
  *
- * Robustness features:
+ * Features:
  *   - Dynamic parameter injection from nextflow.config
  *   - Post-filter gzip integrity check (gzip -t)
  *   - Non-empty output validation (filtered files must have reads)

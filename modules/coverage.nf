@@ -1,7 +1,7 @@
 /*
  * Module 4: Genome Coverage Profiling & Sliding Window Analysis
  * -------------------------------------------------------------
- * Computes per-base depth from deduplicated BAMs, converts to bedGraph,
+ * Computes per-base depth from deduplicated BAMs, converts it to bedGraph,
  * sorts coordinates, and calculates sliding window median coverage.
  */
 process COMPUTE_COVERAGE {

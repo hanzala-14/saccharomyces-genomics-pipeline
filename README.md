@@ -1,3 +1,6 @@
+
+---
+
 #  Saccharomyces Genomics Pipeline
 
 A production-grade, fault-tolerant, and highly optimized Whole Genome Sequencing (WGS) variant calling and comparative phylogenomics pipeline engineered for the *Saccharomyces* genus, with a primary focus on historic lager yeast lineages and large-scale strain compendiums.
@@ -8,7 +11,7 @@ Designed to scale seamlessly from local development to massive High-Performance 
 
 ##  Pipeline Architecture & Workflow
 
-The pipeline is organized into modular, independently testable Nextflow sub-workflows, scaling from raw data acquisition to deep genomic profiling and upcoming phylogenomic analysis.
+The pipeline is organized into modular, independently testable Nextflow sub-workflows, scaling from raw data acquisition to deep genomic profiling and population-scale joint genotyping.
 
 ```mermaid
 graph TD
@@ -21,65 +24,62 @@ graph TD
     C -->|Clean Reads| D(Module 3: Piped BWA Mapping & Samtools Markdup)
     
     D -->|run_coverage = true| E(Module 4: Coverage Profiling)
-    D -->|BAM Streams| F(Future Module 5: GATK Variant Calling)
+    D -->|BAM Streams| F(Module 5: GATK Variant Calling)
     
-    F --> G(Future Module 6: GDS Conversion & SNPRelate)
-    G --> H(Future Module 7: Phylogenomics & SplitsTree)
+    F -->|GVCFs| G(Module 6: Joint Genotyping & Merging)
+    G -->|Master VCFs| H(Future Module 7: Phylogenomics & SNPRelate)
 
-    class B,C,D active;
+    class B,C,D,F,G active;
     class E optional;
-    class F,G,H future;
+    class H future;
 
 ```
 
 ---
 
-##  Implemented Core Modules (Modules 1–4)
+##  Implemented Core Modules (Modules 1–6)
 
-### [Module 1: Data Acquisition & QC Classification](https://www.google.com/search?q=../docs/MODULE_1_DATA_ACQUISITION.md)
+### [Module 1: Data Acquisition & QC Classification]
 
 * **High-Speed Downloads:** Primary ENA FTP retrieval via multi-threaded **`aria2c`** (`-x 16 -s 16`) to bypass server-side bandwidth throttling, backed by a secondary NCBI `prefetch` / `fasterq-dump` fallback.
 * **Strict Integrity:** Automated byte-level structural testing (`gzip -t`) with exponential retry back-offs.
 * **Smart Classification:** Automatically classifies runs into Paired-End (`PE_PASS`), Single-End fallback (`SE_FALLBACK`), or drops corrupt/invalid inputs while generating cohort-wide TSV summaries.
 
-### [Module 2: Read Filtration](https://www.google.com/search?q=../docs/MODULE_2_FILTRATION.md)
+### [Module 2: Read Filtration]
 
 * **Dual Streams:** Handles Paired-End (`FILTER_PE`) and Single-End (`FILTER_SE`) layouts independently through dedicated channel-driven processes.
-* **Dynamic Parameter Injection:** Reads quality, length, and trimming configurations dynamically from `nextflow.config`, remaining dormant unless explicitly enabled.
 * **Post-Filter Safety:** Enforces strict non-empty read counts and gzip structural validation post-filtering.
 
-### Module 3: Mapping, Duplicate Marking & Alignment QC
+### [Module 3: Mapping, Duplicate Marking & Alignment QC]
 
 * **Zero Disk Bloat:** Implements piped streaming (`bwa mem ... | samtools view -Sb -F 4 - | samtools sort ...`) so intermediate uncompressed alignments never touch the disk.
-* **Pure-Samtools Duplicate Marking:** Completely bypasses memory-heavy Java/Picard tools (eliminating heap-space `OutOfMemoryError` crashes on local hardware) using a compiled low-level C workflow (`collate` $\rightarrow$ `fixmate` $\rightarrow$ `sort` $\rightarrow$ `markdup`).
-* **Smart Reference Handling:** Supports local reference FASTAs or automated NCBI Assembly FTP fetching with pre-indexed detection (`.bwt`).
+* **Pure-Samtools Duplicate Marking:** Completely bypasses memory-heavy Java/Picard tools (eliminating heap-space `OutOfMemoryError` crashes on local hardware) using a compiled low-level C workflow.
 
-### Module 4: Genome Coverage Profiling (Optional Toggle)
+### [Module 4: Genome Coverage Profiling (Optional Toggle)]
 
 * **Toggleable Execution:** Controlled via `params.run_coverage = true / false`. Skip coverage calculation during fast iterations, then flip it on and use Nextflow's `-resume` to backfill depth data instantly.
-* **Sliding Window Normalization:** Computes per-base depth, converts to bedGraph, sorts against reference layouts, and calculates sliding window median coverage via `bedtools map` to eliminate local genomic noise.
+* **Sliding Window Normalization:** Converts to bedGraph and calculates sliding window median coverage via `bedtools map` to eliminate local genomic noise.
+
+### [Module 5: Variant Calling (GATK HaplotypeCaller)]
+
+* **Dynamic Reference Agnosticism:** Completely eliminates hardcoded chromosome lists by dynamically parsing the `.fai` index on the fly, instantly scaling to any custom reference genome.
+* **Biological Ploidy Calibration:** Features a config-driven `ploidy_map` that identifies organelle contigs (Mitochondria/Plasmids) and strictly calls them as haploids (`-ploidy 1`), preserving statistical integrity while keeping nuclear DNA diploid.
+
+### [Module 6: Joint Genotyping & Subgenome Merging]
+
+* **Crash-Proof Database Updates:** Utilizes an atomic Bash wrapper for `GenomicsDBImport` that safely isolates existing databases during updates, guaranteeing zero data corruption in the event of network/compute crashes.
+* **Universal *Sensu Stricto* Routing:** Employs a config-based taxonomy dictionary (`species_map`) to automatically detect, isolate, and route individual subgenomes (e.g., *cerevisiae*, *eubayanus*, *paradoxus*) into clean, species-specific master VCFs.
 
 ---
 
-## 🚀 Upcoming Modules & Roadmap
+##  Upcoming Modules & Roadmap
 
 As the project scales toward comprehensive population genomics and evolutionary clock analysis, the following modules are currently in development:
 
-* **Module 5: Variant Calling & Joint Genotyping (GATK)**
-* Per-sample GVCF generation via `GATK HaplotypeCaller`.
-* Cohort merging via `GenomicsDBImport` and joint genotyping via `GenotypeGVCFs`.
-* Hard filtering of SNPs and Indels based on standard WGS filtration parameters.
-
-
-* **Module 6: Matrix Formatting & Population Genetics (SNPRelate)**
-* Conversion of filtered VCFs into Genomic Data Structure (`.gds`) files.
-* Calculation of Identity-by-State (IBS) distance matrices and population stratification metrics.
-
-
-* **Module 7: Phylogenomics & Evolutionary Divergence**
-* Chromosome-specific and combined distance matrix calculations.
-* Neighbor-Joining tree reconstruction via **SplitsTree** to visualize relationships within the *sensu stricto* complex.
-* **Evolutionary Clock Analysis:** Molecular clock modeling in collaboration with institutional research mentors to estimate divergence timelines of historic lager lineages.
+* **Module 7: Matrix Formatting & Phylogenomics**
+* Conversion of filtered VCFs into Genomic Data Structure (`.gds`) files via `SNPRelate`.
+* Calculation of Identity-by-State (IBS) distance matrices and Neighbor-Joining tree reconstruction via **SplitsTree**.
+* **Evolutionary Clock Analysis:** Molecular clock modeling to estimate divergence timelines of historic lager lineages.
 
 
 
@@ -89,13 +89,13 @@ As the project scales toward comprehensive population genomics and evolutionary 
 
 ### Prerequisites
 
-* [Nextflow](https://www.google.com/search?q=https://www.nextflow.io/docs/latest/getstarted.html) (`>=23.10.0`)
-* Container engine ([Docker](https://www.google.com/search?q=https://www.docker.com/) or [Singularity/Apptainer](https://www.google.com/search?q=https://apptainer.org/)) OR [Conda](https://www.google.com/search?q=https://docs.conda.io/)
+* [Nextflow](https://www.nextflow.io/docs/latest/getstarted.html) (`>=23.10.0`)
+* Container engine ([Docker](https://www.docker.com/) or [Singularity/Apptainer](https://apptainer.org/)) OR [Conda](https://docs.conda.io/)
 
 ### 1. Clone the Repository
 
 ```bash
-git https://github.com/hanzala-14/saccharomyces-genomics-pipeline.git
+git clone https://github.com/hanzala-14/saccharomyces-genomics-pipeline.git
 cd saccharomyces-genomics-pipeline
 
 ```
@@ -113,26 +113,36 @@ Strain_B,,/path/to/local_R1.fastq.gz,/path/to/local_R2.fastq.gz
 
 ### 3. Run the Pipeline
 
-**Local Development (Conda profile):**
-
 ```bash
+# Local Development
 nextflow run main.nf -profile conda
 
-```
-
-**Production (Docker container profile):**
-
-```bash
+# Production / HPC Cluster
 nextflow run main.nf -profile docker
 
 ```
 
-**HPC Cluster (Singularity / SLURM profile):**
+---
+
+##  Advanced Usage: Incremental Updates & Compendiums
+
+This pipeline supports **incremental database ingestion**. If your lab maintains a massive compendium (e.g., a 5,000-strain GenomicsDB on an external office drive), you do **not** need to re-run historical data to joint-call new strains.
+
+To append new samples to an existing database:
+
+1. Create a samplesheet containing *only* your new strains.
+2. Run the pipeline, passing the parent directory of your existing databases to the `genomicsdb_update_path` flag:
 
 ```bash
-nextflow run main.nf -profile singularity
+nextflow run main.nf \
+  --samplesheet new_strains.csv \
+  --genomicsdb_update_path "/media/Office_Drive/Yeast_Compendium/Joint_Genotyping" \
+  -profile docker \
+  -resume
 
 ```
+
+*Nextflow will fast-track the new strains to GVCFs, safely inject them into the existing massive compendium, and spit out updated Master VCFs in a fraction of the time.*
 
 ---
 
@@ -145,40 +155,38 @@ params {
     samplesheet       = 'samplesheet.csv'
     outdir            = 'results'
 
-    // Module 1: Data Acquisition
-    max_Retries       = 5
-    sra_max_forks     = 4
-    aria2c_connections= 16
-
-    // Module 2: Read Filtration
-    min_read_length   = 30
-    qualified_quality = 20
-    cut_mean_quality  = 20
-
-    // Module 3: Mapping
-    reference         = 'data/references/cer_eub/cer_eub_reference.fasta'
-    min_mapping_pct   = 0
-
-    // Module 4: Coverage Profiling (Optional Toggle)
-    run_coverage      = false
-    genome_file       = 'data/references/sensustricto_genomefile.tab'
-    sliding_windows   = 'data/references/sensustrictoslidingwindows.bed'
+    // Extracted Module 5 & 6 Configuration
+    ploidy = 2
+    ploidy_map = [ 'M': 1, 'P': 1 ] // Haploid organelles
+    include_extrachromosomal = true
+    
+    merge_strategy = 'separate'
+    extrachromosomal_strategy = 'bundled' 
+    
+    // Taxonomy routing dictionary
+    species_map = [
+        'c': 'cerevisiae', 'e': 'eubayanus', 'p': 'paradoxus',
+        'm': 'mikatae', 'k': 'kudriavzevii', 'u': 'uvarum',
+        'a': 'arboricola', 'j': 'jurei'
+    ]
 }
 
 ```
 
 ---
 
-## 📊 Output Directory Layout
+##  Output Directory Layout
 
 ```text
 results/
 ├── pipeline_info/          # Execution reports, timelines, and DAGs
 ├── strains/                # Strain lists and merged FASTQs
-├── filtration/             # Filtered FASTQs and multiQC-compatible JSON/HTML reports
-├── reference/              # Indexed reference files and dictionaries
+├── filtration/             # Filtered FASTQs and multiQC-compatible JSON reports
 ├── mapped/                 # Sorted BAMs, index files, and mapping summaries
-└── coverage/               # Sliding window median coverage tab-delimited files (when enabled)
+├── Haplotype_Calling/      # Per-strain GVCFs and manifests
+└── Joint_Genotyping/       
+    ├── c_I/                # Stateful GenomicsDB workspaces (can be updated!)
+    └── Final_Merged/       # Final, analysis-ready Master VCFs (e.g., cerevisiae_cohort.vcf.gz)
 
 ```
 
@@ -188,13 +196,17 @@ results/
 
 For deep technical specifications, input/output contracts, and command flag rationales, check the module guides:
 
-* [Module 1: Data Acquisition](https://www.google.com/search?q=docs/MODULE_1_DATA_ACQUISITION.md)
-* [Module 2: Read Filtration](https://www.google.com/search?q=docs/MODULE_2_FILTRATION.md)
-* [Module 3: Mapping & Duplicate Marking](https://www.google.com/search?q=docs/MODULE_3_MAPPING.md)
-* [Module 4: Coverage Profiling](https://www.google.com/search?q=docs/MODULE_4_COVERAGE.md)
+* [`docs/MODULE_1_DATA_ACQUISITION.md`](https://www.google.com/search?q=docs/MODULE_1_DATA_ACQUISITION.md)
+* [`docs/MODULE_2_READ_FILTRATION.md`](https://www.google.com/search?q=docs/MODULE_2_READ_FILTRATION.md)
+* [`docs/MODULE_3_MAPPING.md`](https://www.google.com/search?q=docs/MODULE_3_MAPPING.md)
+* [`docs/MODULE_4_COVERAGE.md`](https://www.google.com/search?q=docs/MODULE_4_COVERAGE.md)
+* [`docs/MODULE_5_VARIANT_CALLING.md`](https://www.google.com/search?q=docs/MODULE_5_VARIANT_CALLING.md)
+* [`docs/MODULE_6_JOINT_GENOTYPING.md`](https://www.google.com/search?q=docs/MODULE_6_JOINT_GENOTYPING.md)
 
 ---
 
 ## 📜 License
 
 Distributed under the MIT License. See `LICENSE` for more information.
+
+---

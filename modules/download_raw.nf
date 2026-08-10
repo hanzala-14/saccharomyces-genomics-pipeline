@@ -1,7 +1,7 @@
 /*
  * Module 1: Data Acquisition, QC Classification & Strain Aggregation
  * -------------------------------------------------------------------
- * Bulletproof FETCH_SRA with:
+ *  FETCH_SRA with:
  *   - Primary Strategy: Multi-threaded ENA FTP via aria2c to bypass throttling
  *   - Secondary Fallback: NCBI SRA prefetch → fasterq-dump pipeline if ENA fails
  *   - Bandwidth Saturation: Maxes out bandwidth via maxForks parallelism
