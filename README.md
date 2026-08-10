@@ -79,7 +79,7 @@ As the project scales toward comprehensive population genomics and evolutionary 
 * **Module 7: Matrix Formatting & Phylogenomics**
 * Conversion of filtered VCFs into Genomic Data Structure (`.gds`) files via `SNPRelate`.
 * Calculation of Identity-by-State (IBS) distance matrices and Neighbor-Joining tree reconstruction via **SplitsTree**.
-* **Evolutionary Clock Analysis:** Molecular clock modeling to estimate divergence timelines of historic lager lineages.
+
 
 
 
