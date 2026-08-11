@@ -39,21 +39,33 @@ process FETCH_SRA {
 
     def retrySleep = 10 * (task.attempt ?: 1)
 
+    // Nextflow Parameters //
+    def ncbi_dir         = params.ncbi_dir ?: '~/.ncbi'
+    def aria_min_split   = params.aria2c_min_split_size ?: '1M'
+    def aria_conn_timeout= params.aria2c_connect_timeout ?: 30
+    def aria_timeout     = params.aria2c_timeout ?: 60
+    def aria_max_tries   = params.aria2c_max_tries ?: 3
+    def aria_retry_wait  = params.aria2c_retry_wait ?: 10
+    
+    def prefetch_t_out   = params.prefetch_timeout ?: 3600
+    def prefetch_size    = params.prefetch_max_size ?: '50G'
+    def fasterq_t_out    = params.fasterq_timeout ?: 1800
+
     """
     set -euo pipefail
 
     echo "=== FETCH_SRA: strain=${strain_id} accession=${accession} ===" >&2
 
     # ─── SRA Toolkit Config ────────────────────────────────────────────────
-    mkdir -p "\${HOME}/.ncbi"
-    cat > "\${HOME}/.ncbi/user-settings.mkfg" <<'MKFG'
+    mkdir -p "${ncbi_dir}"
+    cat > "${ncbi_dir}/user-settings.mkfg" <<'MKFG'
 /LIBS/IMAGE_GUID = "auto-nextflow-pipeline"
 /libs/cloud/report_instance_identity = "false"
 /libs/cloud/accept_aws_charges = "false"
 /repository/user/main/public/root = "."
 MKFG
-    export VDB_CONFIG="\${HOME}/.ncbi"
-    export NCBI_SETTINGS="\${HOME}/.ncbi/user-settings.mkfg"
+    export VDB_CONFIG="${ncbi_dir}"
+    export NCBI_SETTINGS="${ncbi_dir}/user-settings.mkfg"
 
     if [ "${task.attempt}" -gt 1 ]; then
         echo "Retry attempt ${task.attempt} — sleeping ${retrySleep}s..." >&2
@@ -67,11 +79,11 @@ MKFG
 
     ARIA_OPTS="-x ${params.aria2c_connections} -s ${params.aria2c_connections} -c \\
         --max-connection-per-server=${params.aria2c_connections} \\
-        --min-split-size=1M \\
-        --connect-timeout=30 \\
-        --timeout=60 \\
-        --max-tries=3 \\
-        --retry-wait=10 \\
+        --min-split-size=${aria_min_split} \\
+        --connect-timeout=${aria_conn_timeout} \\
+        --timeout=${aria_timeout} \\
+        --max-tries=${aria_max_tries} \\
+        --retry-wait=${aria_retry_wait} \\
         --console-log-level=notice \\
         --summary-interval=10"
 
@@ -94,8 +106,8 @@ MKFG
     if [ "\$ena_ok" -eq 0 ]; then
         echo "[Strategy 2] ENA failed. Using prefetch + fasterq-dump..." >&2
         
-        timeout 3600 prefetch --max-size 50G "${accession}" || exit 1
-        timeout 1800 fasterq-dump --split-files --threads ${task.cpus} --temp . "${accession}" || exit 1
+        timeout ${prefetch_t_out} prefetch --max-size ${prefetch_size} "${accession}" || exit 1
+        timeout ${fasterq_t_out} fasterq-dump --split-files --threads ${task.cpus} --temp . "${accession}" || exit 1
         
         rm -rf "${accession}/" || true
 
