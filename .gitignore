@@ -21,3 +21,11 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+# Nextflow & Pipeline Data
+work/
+results/
+.nextflow/
+.nextflow.log*
+data/raw/*.fastq.gz
+data/raw/*.fq.gz
+
