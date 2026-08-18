@@ -80,7 +80,6 @@ graph TD
 
 * **C++ Identity-by-State (IBS) Engine:** Bypasses slow R loops by feeding vectorized, haploid-equivalent allele matrices into a custom OpenMP-accelerated C++ backend for high-speed genetic distance calculations.
 * **Introgression Detection:** Automatically generates chromosomal-level NeighborNet networks (SplitsTree compatible) and Robinson-Foulds topological heatmaps to programmatically flag hybridization and incomplete lineage sorting.
-* **Publication-Ready Exports:** Zero-hardcoded, CLI-driven R scripts dynamically route and output midpoint-rooted, bootstrapped Neighbor-Joining (NJ) trees as `.pdf`, `.nwk`, and `.nexus` files.
 
 ---
 
