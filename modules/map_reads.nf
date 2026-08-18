@@ -70,7 +70,6 @@ process FETCH_REFERENCE {
     echo "[FETCH_REFERENCE] Downloaded ${genome_id} (\$(grep -c '^>' ${genome_id}.fasta) sequences)"
     """
 }
-
 process BWA_INDEX {
     tag "${fasta.simpleName}"
     label 'medium'
@@ -90,19 +89,8 @@ process BWA_INDEX {
 
     echo "[BWA_INDEX] Indexing ${fasta}"
 
-    # BWA index
+    # BWA index 
     bwa index ${fasta}
-
-    # samtools faidx
-    samtools faidx ${fasta}
-
-    # Picard/GATK sequence dictionary
-    picard CreateSequenceDictionary \\
-        R=${fasta} \\
-        O=${fasta.simpleName}.dict
-
-    # Move dict to match fasta name convention
-    mv ${fasta.simpleName}.dict ${fasta}.dict 2>/dev/null || true
 
     echo "[BWA_INDEX] Indexing complete: \$(ls ${fasta}.*)"
     """

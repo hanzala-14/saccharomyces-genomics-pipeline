@@ -135,8 +135,7 @@ process MERGE_VCFS {
     tuple val(prefix), path(vcfs), path(tbis)
 
     output:
-    tuple path("${prefix}_cohort.vcf.gz"), path("${prefix}_cohort.vcf.gz.tbi"), emit: final_vcf
-
+    tuple val(prefix), path("${prefix}_cohort.vcf.gz"), path("${prefix}_cohort.vcf.gz.tbi"), emit: final_vcf
     script:
     def avail_mem = (task.memory.toGiga() * 0.8).intValue()
     def input_args = vcfs.collect { vcf -> "-I ${vcf}" }.join(" ")

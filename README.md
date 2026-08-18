@@ -1,7 +1,7 @@
 
 ---
 
-#  Saccharomyces Genomics Pipeline
+# Saccharomyces Genomics Pipeline
 
 A production-grade, fault-tolerant, and highly optimized Whole Genome Sequencing (WGS) variant calling and comparative phylogenomics pipeline engineered for the *Saccharomyces* genus, with a primary focus on historic lager yeast lineages and large-scale strain compendiums.
 
@@ -9,9 +9,9 @@ Designed to scale seamlessly from local development to massive High-Performance 
 
 ---
 
-##  Pipeline Architecture & Workflow
+## Pipeline Architecture & Workflow
 
-The pipeline is organized into modular, independently testable Nextflow sub-workflows, scaling from raw data acquisition to deep genomic profiling and population-scale joint genotyping.
+The pipeline is organized into modular, independently testable Nextflow sub-workflows, scaling from raw data acquisition to deep genomic profiling, population-scale joint genotyping, strict variant filtration, and topological phylogenomics.
 
 ```mermaid
 graph TD
@@ -27,17 +27,17 @@ graph TD
     D -->|BAM Streams| F(Module 5: GATK Variant Calling)
     
     F -->|GVCFs| G(Module 6: Joint Genotyping & Merging)
-    G -->|Master VCFs| H(Future Module 7: Phylogenomics & SNPRelate)
+    G -->|Master VCFs| H(Module 7: Variant Filtration & QC)
+    H -->|Analysis-Ready VCFs| I(Module 8: Phylogenomics & Trees)
 
-    class B,C,D,F,G active;
+    class B,C,D,F,G,H,I active;
     class E optional;
-    class H future;
 
 ```
 
 ---
 
-##  Implemented Core Modules (Modules 1–6)
+## Implemented Core Modules (Modules 1–8)
 
 ### [Module 1: Data Acquisition & QC Classification]
 
@@ -68,20 +68,28 @@ graph TD
 ### [Module 6: Joint Genotyping & Subgenome Merging]
 
 * **Crash-Proof Database Updates:** Utilizes an atomic Bash wrapper for `GenomicsDBImport` that safely isolates existing databases during updates, guaranteeing zero data corruption in the event of network/compute crashes.
-* **Universal *Sensu Stricto* Routing:** Employs a config-based taxonomy dictionary (`species_map`) to automatically detect, isolate, and route individual subgenomes (e.g., *cerevisiae*, *eubayanus*, *paradoxus*) into clean, species-specific master VCFs.
+* **Universal *Sensu Stricto* Routing:** Employs a config-based taxonomy dictionary (`species_map`) to automatically detect, isolate, and route individual subgenomes (e.g., *cerevisiae*, *eubayanus*) into clean, species-specific master VCFs.
+
+### [Module 7: Variant Filtration & Quality Control]
+
+* **Parallel Execution Architecture:** Splits SNPs and INDELs into independent computational streams, cutting GATK filtering execution time in half.
+* **Config-Driven Mathematics:** Injects strict GATK hard-filtering thresholds directly from `nextflow.config`, ensuring zero hardcoding and high cross-species portability.
+* **Biological Accuracy:** Dynamically extracts species prefixes to mask unmappable repetitive regions (e.g., Ty elements, telomeres) and automatically left-aligns INDEL coordinates to standardize downstream analysis.
+
+### [Module 8: Phylogenomics & Evolutionary Trees]
+
+* **C++ Identity-by-State (IBS) Engine:** Bypasses slow R loops by feeding vectorized, haploid-equivalent allele matrices into a custom OpenMP-accelerated C++ backend for high-speed genetic distance calculations.
+* **Introgression Detection:** Automatically generates chromosomal-level NeighborNet networks (SplitsTree compatible) and Robinson-Foulds topological heatmaps to programmatically flag hybridization and incomplete lineage sorting.
+* **Publication-Ready Exports:** Zero-hardcoded, CLI-driven R scripts dynamically route and output midpoint-rooted, bootstrapped Neighbor-Joining (NJ) trees as `.pdf`, `.nwk`, and `.nexus` files.
 
 ---
 
-##  Upcoming Modules & Roadmap
+## Upcoming Modules & Roadmap
 
-As the project scales toward comprehensive population genomics and evolutionary clock analysis, the following modules are currently in development:
+As the project scales toward comprehensive population genomics, the following modules are currently in development for subsequent releases:
 
-* **Module 7: Matrix Formatting & Phylogenomics**
-* Conversion of filtered VCFs into Genomic Data Structure (`.gds`) files via `SNPRelate`.
-* Calculation of Identity-by-State (IBS) distance matrices and Neighbor-Joining tree reconstruction via **SplitsTree**.
-
-
-
+* **Module 9: Functional Annotation** (Integration of `SnpEff` / `VEP` to predict the phenotypic impact of surviving variants).
+* **Module 10: Admixture & Population Structure** (Automated PCA and ancestral sub-population modeling).
 
 ---
 
@@ -124,7 +132,7 @@ nextflow run main.nf -profile docker
 
 ---
 
-##  Advanced Usage: Incremental Updates & Compendiums
+## Advanced Usage: Incremental Updates & Compendiums
 
 This pipeline supports **incremental database ingestion**. If your lab maintains a massive compendium (e.g., a 5,000-strain GenomicsDB on an external office drive), you do **not** need to re-run historical data to joint-call new strains.
 
@@ -169,13 +177,22 @@ params {
         'm': 'mikatae', 'k': 'kudriavzevii', 'u': 'uvarum',
         'a': 'arboricola', 'j': 'jurei'
     ]
+    
+    // Module 7 Storage Toggles
+    keep_snp_vcf         = true
+    keep_indel_vcf       = true
+    keep_merged_vcf      = true
+
+    // Module 8 Phylogenomics Engine
+    run_phylogeny        = true
+    ibs_strategy         = 'chromosomal'
 }
 
 ```
 
 ---
 
-##  Output Directory Layout
+## Output Directory Layout
 
 ```text
 results/
@@ -184,9 +201,12 @@ results/
 ├── filtration/             # Filtered FASTQs and multiQC-compatible JSON reports
 ├── mapped/                 # Sorted BAMs, index files, and mapping summaries
 ├── Haplotype_Calling/      # Per-strain GVCFs and manifests
-└── Joint_Genotyping/       
-    ├── c_I/                # Stateful GenomicsDB workspaces (can be updated!)
-    └── Final_Merged/       # Final, analysis-ready Master VCFs (e.g., cerevisiae_cohort.vcf.gz)
+├── Joint_Genotyping/       
+│   ├── c_I/                # Stateful GenomicsDB workspaces (can be updated!)
+│   └── Final_Merged/       # Pre-filtration cohort VCFs
+├── Variant_Filtration/     # High-fidelity, hard-filtered SNPs, INDELs, and QC reports
+└── Phylogeny/              
+    └── Trees/              # Publication-ready PDFs, Newick trees, and Nexus splits graphs
 
 ```
 
@@ -202,11 +222,11 @@ For deep technical specifications, input/output contracts, and command flag rati
 * [`docs/MODULE_4_COVERAGE.md`](https://www.google.com/search?q=docs/MODULE_4_COVERAGE.md)
 * [`docs/MODULE_5_VARIANT_CALLING.md`](https://www.google.com/search?q=docs/MODULE_5_VARIANT_CALLING.md)
 * [`docs/MODULE_6_JOINT_GENOTYPING.md`](https://www.google.com/search?q=docs/MODULE_6_JOINT_GENOTYPING.md)
+* [`docs/MODULE_7_VARIANT_FILTRATION.md`](https://www.google.com/search?q=docs/MODULE_7_VARIANT_FILTRATION.md)
+* [`docs/MODULE_8_PHYLOGENOMICS.md`](https://www.google.com/search?q=docs/MODULE_8_PHYLOGENOMICS.md)
 
 ---
 
 ## 📜 License
 
 Distributed under the MIT License. See `LICENSE` for more information.
-
----

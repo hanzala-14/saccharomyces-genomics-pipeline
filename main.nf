@@ -43,6 +43,17 @@ include {
     MERGE_VCFS
 } from './modules/joint_genotyping.nf'
 
+include {
+    FILTER_SNPS
+    FILTER_INDELS
+    MERGE_AND_CLEAN
+} from './modules/variant_filtration.nf'
+
+include {
+    PREP_ALLELES
+    RUN_IBS
+} from './modules/phylogenomy.nf'
+
 workflow {
 
     // =========================================================================
@@ -383,4 +394,59 @@ workflow {
 
     // Pass the intelligently grouped channel to Picard
     MERGE_VCFS(ch_for_merge)
+
+    // =========================================================================
+    // MODULE 7: VARIANT FILTRATION & QC
+    // =========================================================================
+    
+    // Load the intervals file (with a safety check so it crashes instantly if missing)
+    ch_intervals = file(params.repetitive_intervals, checkIfExists: true)
+
+    // Extract the individual reference files from Module 5's prepared GATK bundle
+    // We use .first() so Nextflow knows it can reuse these files endlessly
+    ch_fasta_clean = PREPARE_GATK_REF.out.gatk_ref.map { fasta, _fai, _dict -> fasta }.first()
+    ch_fai_clean   = PREPARE_GATK_REF.out.gatk_ref.map { _fasta, fai, _dict -> fai }.first()
+    ch_dict_clean  = PREPARE_GATK_REF.out.gatk_ref.map { _fasta, _fai, dict -> dict }.first()
+    // 1. Launch SNP and INDEL filtering simultaneously on the merged cohort VCFs
+    FILTER_SNPS(
+        MERGE_VCFS.out,
+        ch_fasta_clean,
+        ch_fai_clean,
+        ch_dict_clean,
+        ch_intervals
+    )
+
+    FILTER_INDELS(
+        MERGE_VCFS.out,
+        ch_fasta_clean,
+        ch_fai_clean,
+        ch_dict_clean,
+        ch_intervals
+    )
+
+    // 2. The Join Operator: Wait for both to finish, then match them by cohort name (by: 0)
+    ch_filtered_joined = FILTER_SNPS.out.filtered_snps
+        .join(FILTER_INDELS.out.filtered_indels, by: 0)
+
+    // 3. Merge and clean the surviving variants
+    MERGE_AND_CLEAN(
+        ch_filtered_joined,
+        ch_fasta_clean,
+        ch_fai_clean,
+        ch_dict_clean
+    )
+    
+    // =========================================================================
+    // MODULE 8: PHYLOGENOMICS (IBSx & Tree Building)
+    // =========================================================================
+    
+    if (params.run_phylogeny) {
+        // Explicitly pass the bin/ directory to avoid Docker symlink crashes
+        ch_custom_scripts = file("${projectDir}/bin")
+
+        // 1. Slice the clean VCFs into allele tables
+        PREP_ALLELES(MERGE_AND_CLEAN.out.final_vcf)
+        // 2. Generate IBS Distance Matrices using the C++ engine
+        RUN_IBS(PREP_ALLELES.out.allele_tables, ch_custom_scripts)
+    }
 }

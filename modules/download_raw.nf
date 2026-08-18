@@ -74,40 +74,50 @@ MKFG
 
     ena_ok=0
 
-    # ─── Strategy 1: ENA FTP via Aria2c ───────────────────────────────────
-    echo "[Strategy 1] Trying ENA via Aria2c..." >&2
+    # ─── Strategy 1: ENA FTP via Aria2c (Conditional check) ─────────────────
+    if command -v aria2c &> /dev/null; then
+        echo "[Strategy 1] Trying ENA via Aria2c..." >&2
 
-    ARIA_OPTS="-x ${params.aria2c_connections} -s ${params.aria2c_connections} -c \\
-        --max-connection-per-server=${params.aria2c_connections} \\
-        --min-split-size=${aria_min_split} \\
-        --connect-timeout=${aria_conn_timeout} \\
-        --timeout=${aria_timeout} \\
-        --max-tries=${aria_max_tries} \\
-        --retry-wait=${aria_retry_wait} \\
-        --console-log-level=notice \\
-        --summary-interval=10"
+        ARIA_OPTS="-x ${params.aria2c_connections} -s ${params.aria2c_connections} -c \\
+            --max-connection-per-server=${params.aria2c_connections} \\
+            --min-split-size=${aria_min_split} \\
+            --connect-timeout=${aria_conn_timeout} \\
+            --timeout=${aria_timeout} \\
+            --max-tries=${aria_max_tries} \\
+            --retry-wait=${aria_retry_wait} \\
+            --console-log-level=notice \\
+            --summary-interval=10"
 
-    if aria2c \$ARIA_OPTS -o "${accession}_1.fastq.gz" "${base}/${accession}_1.fastq.gz"; then
-        if [ -s "${accession}_1.fastq.gz" ] && gzip -t "${accession}_1.fastq.gz" 2>/dev/null; then
-            ena_ok=1
-            echo "[Strategy 1] R1 downloaded from ENA." >&2
+        if aria2c \$ARIA_OPTS -o "${accession}_1.fastq.gz" "${base}/${accession}_1.fastq.gz"; then
+            if [ -s "${accession}_1.fastq.gz" ] && gzip -t "${accession}_1.fastq.gz" 2>/dev/null; then
+                ena_ok=1
+                echo "[Strategy 1] R1 downloaded from ENA." >&2
 
-            if aria2c \$ARIA_OPTS -o "${accession}_2.fastq.gz" "${base}/${accession}_2.fastq.gz"; then
-                if ! gzip -t "${accession}_2.fastq.gz" 2>/dev/null; then
-                    rm -f "${accession}_2.fastq.gz"
+                if aria2c \$ARIA_OPTS -o "${accession}_2.fastq.gz" "${base}/${accession}_2.fastq.gz"; then
+                    if ! gzip -t "${accession}_2.fastq.gz" 2>/dev/null; then
+                        rm -f "${accession}_2.fastq.gz"
+                    fi
                 fi
+            else
+                rm -f "${accession}_1.fastq.gz" "${accession}_2.fastq.gz"
             fi
-        else
-            rm -f "${accession}_1.fastq.gz" "${accession}_2.fastq.gz"
         fi
+    else
+        echo "[Strategy 1] aria2c not found in container. Skipping to Strategy 2..." >&2
     fi
 
-    # ─── Strategy 2: prefetch fallback (If ENA is missing) ────────────────
+    # ─── Strategy 2: prefetch fallback (If ENA is missing or skipped) ───────
     if [ "\$ena_ok" -eq 0 ]; then
-        echo "[Strategy 2] ENA failed. Using prefetch + fasterq-dump..." >&2
+        echo "[Strategy 2] Using official NCBI prefetch + fasterq-dump..." >&2
         
-        timeout ${prefetch_t_out} prefetch --max-size ${prefetch_size} "${accession}" || exit 1
-        timeout ${fasterq_t_out} fasterq-dump --split-files --threads ${task.cpus} --temp . "${accession}" || exit 1
+        # Safely wrap with timeout if available, otherwise run directly
+        if command -v timeout &> /dev/null; then
+            timeout ${prefetch_t_out} prefetch --max-size ${prefetch_size} "${accession}" || exit 1
+            timeout ${fasterq_t_out} fasterq-dump --split-files --threads ${task.cpus} --temp . "${accession}" || exit 1
+        else
+            prefetch --max-size ${prefetch_size} "${accession}" || exit 1
+            fasterq-dump --split-files --threads ${task.cpus} --temp . "${accession}" || exit 1
+        fi
         
         rm -rf "${accession}/" || true
 
@@ -247,7 +257,7 @@ PY
 process MERGE_PE {
     tag { "${strain_id}" }
     label 'base'
-    publishDir path: { "${params.outdir}/strains/${strain_id}" }, mode: 'copy'
+    publishDir path: { "${params.outdir}/Strains/${strain_id}" }, mode: 'copy'
 
     input:
     tuple val(strain_id), path(r1_files), path(r2_files)
@@ -268,7 +278,7 @@ process MERGE_PE {
 process MERGE_SE {
     tag { "${strain_id}" }
     label 'base'
-    publishDir path: { "${params.outdir}/strains/${strain_id}" }, mode: 'copy'
+    publishDir path: { "${params.outdir}/Strains/${strain_id}" }, mode: 'copy'
 
     input:
     tuple val(strain_id), path(r1_files)
@@ -286,7 +296,7 @@ process MERGE_SE {
 
 process CREATE_STRAIN_LIST {
     label 'tiny'
-    publishDir path: "${params.outdir}", mode: 'copy'
+    publishDir path: "${params.outdir}/Strains/", mode: 'copy'
 
     input:
     val strain_ids
@@ -305,7 +315,7 @@ EOF
 
 process WRITE_RUN_QC {
     label 'tiny'
-    publishDir path: "${params.outdir}", mode: 'copy'
+    publishDir path: "${params.outdir}/Strains/", mode: 'copy'
 
     input:
     val rows
@@ -330,7 +340,7 @@ EOF
 
 process WRITE_STRAIN_QC {
     label 'tiny'
-    publishDir path: "${params.outdir}", mode: 'copy'
+    publishDir path: "${params.outdir}/Strains/", mode: 'copy'
 
     input:
     val rows
