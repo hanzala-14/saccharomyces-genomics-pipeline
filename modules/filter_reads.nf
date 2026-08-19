@@ -20,7 +20,6 @@
 process FILTER_PE {
     tag "${strain_id}"
     label 'base'
-    container 'quay.io/biocontainers/fastp:1.3.6--h43da1c4_0'
 
     publishDir "${params.outdir}/Filtration/filtered", mode: 'copy', pattern: '*.filt.*.fastq.gz'
     publishDir "${params.outdir}/Filtration/reports",  mode: 'copy', pattern: '*.{html,json}'
@@ -93,7 +92,6 @@ process FILTER_PE {
 process FILTER_SE {
     tag "${strain_id}"
     label 'base'
-    container 'quay.io/biocontainers/fastp:1.3.6--h43da1c4_0'
 
     publishDir "${params.outdir}/Filtration/filtered", mode: 'copy', pattern: '*.filt.SE.fastq.gz'
     publishDir "${params.outdir}/Filtration/reports",  mode: 'copy', pattern: '*.{html,json}'

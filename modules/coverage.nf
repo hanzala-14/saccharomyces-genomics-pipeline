@@ -7,7 +7,6 @@
 process COMPUTE_COVERAGE {
     tag "${strain_id}"
     label 'low'
-    container 'quay.io/biocontainers/bedtools:2.31.1--h13024bc_3'
 
     publishDir "${params.outdir}/Coverage", mode: 'copy', pattern: '*.slidingwindow.tab'
 

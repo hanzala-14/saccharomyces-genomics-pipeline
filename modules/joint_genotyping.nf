@@ -8,7 +8,7 @@
 // STEP 6A: GENOMICSDB IMPORT
 // =========================================================================
 process GENOMICSDB_IMPORT {
-    tag { "Chr: ${chrom}" }
+    tag { "${chrom} | DB: ${update_path ? 'INCREMENTAL' : 'FRESH'}" }
     label 'high'
     
     // publishDir with overwrite: true allows Nextflow to safely replace the old DB folder
@@ -29,9 +29,9 @@ process GENOMICSDB_IMPORT {
     def avail_mem = (task.memory.toGiga() * 0.8).intValue()
     def db_name = "genomicsdb_${chrom}"
     
-    // SOURCE: Where we copy the old database from (e.g., external hard drive)
-    def existing_db = update_path ? "${update_path}/${chrom}/${db_name}" : null
-    
+    // SOURCE: Where we copy the old database from (e.g., external drive or old results)
+    def existing_db = update_path ? "${file(update_path).toAbsolutePath()}/${chrom}/${db_name}" : null  
+       
     // DESTINATION: Where Nextflow is going to publish the results
     def target_publish_dir = "${params.outdir}/Joint_Genotyping/${chrom}/${db_name}"
 
@@ -40,12 +40,14 @@ process GENOMICSDB_IMPORT {
 
     echo "=== [GENOMICSDB_IMPORT] Building sample map for ${chrom} ===" >&2
     rm -f sample_map_${chrom}.txt
+
     for vcf in *.${chrom}.g.vcf.gz; do
         strain=\$(basename "\$vcf" ".${chrom}.g.vcf.gz")
         echo -e "\${strain}\\t\${PWD}/\${vcf}" >> sample_map_${chrom}.txt
     done
 
     n_samples=\$(wc -l < sample_map_${chrom}.txt)
+
     if [ "\${n_samples}" -eq 0 ]; then
         echo "ERROR: No GVCFs found for chromosome ${chrom}" >&2
         exit 1
@@ -53,15 +55,28 @@ process GENOMICSDB_IMPORT {
 
     # READ-ONLY COPY: Pull the database from the source (external drive or old results)
     if [ -n "${existing_db ?: ''}" ] && [ -d "${existing_db}" ]; then
-        echo "=== [GENOMICSDB_IMPORT] Copying existing database for incremental update ===" >&2
+        echo "=== [GENOMICSDB_IMPORT] MODE: INCREMENTAL ===" >&2
+        echo "=== [GENOMICSDB_IMPORT] Existing DB: ${existing_db} ===" >&2
+        echo "=== [GENOMICSDB_IMPORT] New GVCFs: \${n_samples} ===" >&2
+
         cp -r "${existing_db}" "${db_name}"
+
         IMPORT_FLAG="--genomicsdb-update-workspace-path"
+
+        echo "=== [GENOMICSDB_IMPORT] Using \${IMPORT_FLAG} ===" >&2
+
     else
-        echo "=== [GENOMICSDB_IMPORT] No existing DB found. Running fresh build. ===" >&2
+        echo "=== [GENOMICSDB_IMPORT] MODE: FRESH ===" >&2
+        echo "=== [GENOMICSDB_IMPORT] Existing DB not found: ${existing_db ?: 'none'} ===" >&2
+        echo "=== [GENOMICSDB_IMPORT] New GVCFs: \${n_samples} ===" >&2
+
         IMPORT_FLAG="--genomicsdb-workspace-path"
+
+        echo "=== [GENOMICSDB_IMPORT] Using \${IMPORT_FLAG} ===" >&2
     fi
 
     echo "=== [GENOMICSDB_IMPORT] Running Import for ${chrom} ===" >&2
+
     gatk --java-options "-Xmx${avail_mem}g -XX:+UseParallelGC -XX:ParallelGCThreads=2" \\
         GenomicsDBImport \\
         --sample-name-map sample_map_${chrom}.txt \\
