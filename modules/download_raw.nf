@@ -11,10 +11,10 @@
  *   - Non-Interactive: Pre-configured SRA Toolkit settings suppressing interactive prompts
  */
 process FETCH_SRA {
+
     tag { "${strain_id} ${accession}" }
     label 'base'
 
-    // Error logic is mapped to nextflow.config parameters
     errorStrategy { task.exitStatus in [1, 137, 143, 255] ? 'retry' : 'finish' }
     maxRetries params.max_Retries
 
@@ -22,118 +22,331 @@ process FETCH_SRA {
     tuple val(strain_id), val(accession)
 
     output:
-    tuple val(strain_id), val(accession), path("${accession}_1.fastq.gz"), path("${accession}_2.fastq.gz")
+    tuple val(strain_id),
+          val(accession),
+          path("${accession}_1.fastq.gz"),
+          path("${accession}_2.fastq.gz")
 
     script:
+
     if (!(accession ==~ /^[A-Z]{3}\d{6,8}$/)) {
         error "[FETCH_SRA] strain=${strain_id} invalid accession format: ${accession}"
     }
 
-    def len = accession.size()
-    def pfx = accession[0..5]
-    def subdir = (len == 9) ? null : (len == 10) ? "00${accession[-1]}" : (len == 11) ? "0${accession[-2..-1]}" : (len == 12) ? accession[-3..-1] : null
-    
-    def base = (len == 9)
-        ? "https://ftp.sra.ebi.ac.uk/vol1/fastq/${pfx}/${accession}"
-        : "https://ftp.sra.ebi.ac.uk/vol1/fastq/${pfx}/${subdir}/${accession}"
+    def retrySleep        = params.fetch_retry_sleep * (task.attempt ?: 1)
 
-    def retrySleep = 10 * (task.attempt ?: 1)
+    def ncbi_dir          = params.ncbi_dir
 
-    // Nextflow Parameters //
-    def ncbi_dir         = params.ncbi_dir ?: '~/.ncbi'
-    def aria_min_split   = params.aria2c_min_split_size ?: '1M'
-    def aria_conn_timeout= params.aria2c_connect_timeout ?: 30
-    def aria_timeout     = params.aria2c_timeout ?: 60
-    def aria_max_tries   = params.aria2c_max_tries ?: 3
-    def aria_retry_wait  = params.aria2c_retry_wait ?: 10
-    
-    def prefetch_t_out   = params.prefetch_timeout ?: 3600
-    def prefetch_size    = params.prefetch_max_size ?: '50G'
-    def fasterq_t_out    = params.fasterq_timeout ?: 1800
+    def aria_min_split    = params.aria2c_min_split_size
+    def aria_conn_timeout = params.aria2c_connect_timeout
+    def aria_timeout      = params.aria2c_timeout
+    def aria_max_tries    = params.aria2c_max_tries
+    def aria_retry_wait   = params.aria2c_retry_wait
+
+    def prefetch_t_out    = params.prefetch_timeout
+    def prefetch_size     = params.prefetch_max_size
+    def fasterq_t_out     = params.fasterq_timeout
+
+    def api_max_time      = params.ena_api_max_time
+    def api_retries       = params.ena_api_retries
+    def api_retry_wait    = params.ena_api_retry_wait
+    def aria_summary      = params.aria2c_summary_interval
 
     """
     set -euo pipefail
 
-    echo "=== FETCH_SRA: strain=${strain_id} accession=${accession} ===" >&2
+    echo "=== FETCH_SRA: strain=${strain_id} accession=${accession} attempt=${task.attempt} ===" >&2
 
-    # ─── SRA Toolkit Config ────────────────────────────────────────────────
+    # -------------------------------------------------------------------------
+    # SRA Toolkit configuration
+    # -------------------------------------------------------------------------
+
     mkdir -p "${ncbi_dir}"
+
     cat > "${ncbi_dir}/user-settings.mkfg" <<'MKFG'
-/LIBS/IMAGE_GUID = "auto-nextflow-pipeline"
-/libs/cloud/report_instance_identity = "false"
-/libs/cloud/accept_aws_charges = "false"
-/repository/user/main/public/root = "."
-MKFG
+    /LIBS/IMAGE_GUID = "auto-nextflow-pipeline"
+    /libs/cloud/report_instance_identity = "false"
+    /libs/cloud/accept_aws_charges = "false"
+    /repository/user/main/public/root = "."
+    MKFG
+
     export VDB_CONFIG="${ncbi_dir}"
     export NCBI_SETTINGS="${ncbi_dir}/user-settings.mkfg"
 
+    # -------------------------------------------------------------------------
+    # Retry back-off
+    # -------------------------------------------------------------------------
+
     if [ "${task.attempt}" -gt 1 ]; then
         echo "Retry attempt ${task.attempt} — sleeping ${retrySleep}s..." >&2
-        sleep ${retrySleep}
+        sleep "${retrySleep}"
+    fi
+
+    # -------------------------------------------------------------------------
+    # Step 0: Ask ENA for the true run layout and exact FASTQ URLs
+    # -------------------------------------------------------------------------
+
+    layout="UNKNOWN"
+    url_r1=""
+    url_r2=""
+    url_se=""
+
+    API_URL="https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${accession}&result=read_run&fields=run_accession,fastq_ftp&format=tsv"
+    fastq_field=""
+
+    if command -v curl &>/dev/null; then
+        fastq_field=\$(
+            curl -fsSL \
+                 --retry ${api_retries} \
+                 --retry-delay ${api_retry_wait} \
+                 --max-time ${api_max_time} \
+                 "\${API_URL}" 2>/dev/null \
+            | awk 'NR==2 {print \$2}' \
+            || true
+        )
+    fi
+
+    if [ -n "\${fastq_field}" ]; then
+
+        IFS=';' read -ra urls <<< "\${fastq_field}"
+
+        for u in "\${urls[@]}"; do
+            case "\${u}" in
+                *_1.fastq.gz)
+                    url_r1="https://\${u}"
+                    ;;
+                *_2.fastq.gz)
+                    url_r2="https://\${u}"
+                    ;;
+                *.fastq.gz)
+                    url_se="https://\${u}"
+                    ;;
+            esac
+        done
+
+        if [ -n "\${url_r1}" ] && [ -n "\${url_r2}" ]; then
+            layout="PE"
+        elif [ -n "\${url_r1}" ]; then
+            layout="SE"
+            url_se="\${url_r1}"
+        elif [ -n "\${url_se}" ]; then
+            layout="SE"
+        fi
+
+        echo "[ENA API] ${accession} reported layout=\${layout}" >&2
+
+    else
+        echo "[ENA API] No metadata returned — will use NCBI fallback." >&2
     fi
 
     ena_ok=0
 
-    # ─── Strategy 1: ENA FTP via Aria2c (Conditional check) ─────────────────
-    if command -v aria2c &> /dev/null; then
-        echo "[Strategy 1] Trying ENA via Aria2c..." >&2
+    # -------------------------------------------------------------------------
+    # Strategy 1: ENA via aria2c
+    # -------------------------------------------------------------------------
 
-        ARIA_OPTS="-x ${params.aria2c_connections} -s ${params.aria2c_connections} -c \\
-            --max-connection-per-server=${params.aria2c_connections} \\
-            --min-split-size=${aria_min_split} \\
-            --connect-timeout=${aria_conn_timeout} \\
-            --timeout=${aria_timeout} \\
-            --max-tries=${aria_max_tries} \\
-            --retry-wait=${aria_retry_wait} \\
-            --console-log-level=notice \\
-            --summary-interval=10"
+    if command -v aria2c &>/dev/null && [ "\${layout}" != "UNKNOWN" ]; then
 
-        if aria2c \$ARIA_OPTS -o "${accession}_1.fastq.gz" "${base}/${accession}_1.fastq.gz"; then
-            if [ -s "${accession}_1.fastq.gz" ] && gzip -t "${accession}_1.fastq.gz" 2>/dev/null; then
+        echo "[Strategy 1] Trying ENA via aria2c (layout=\${layout})..." >&2
+
+        ARIA_OPTS="-x ${params.aria2c_connections} \
+            -s ${params.aria2c_connections} \
+            -c \
+            --max-connection-per-server=${params.aria2c_connections} \
+            --min-split-size=${aria_min_split} \
+            --connect-timeout=${aria_conn_timeout} \
+            --timeout=${aria_timeout} \
+            --max-tries=${aria_max_tries} \
+            --retry-wait=${aria_retry_wait} \
+            --console-log-level=notice \
+            --summary-interval=${aria_summary}"
+
+        # ---------------------------------------------------------------------
+        # PE: R1 AND R2 must both succeed and pass integrity checks
+        # ---------------------------------------------------------------------
+
+        if [ "\${layout}" = "PE" ]; then
+
+            rm -f "${accession}_1.fastq.gz" "${accession}_2.fastq.gz"
+
+            if aria2c \${ARIA_OPTS} \
+                   -o "${accession}_1.fastq.gz" \
+                   "\${url_r1}" \
+               && [ -s "${accession}_1.fastq.gz" ] \
+               && gzip -t "${accession}_1.fastq.gz" 2>/dev/null \
+               && aria2c \${ARIA_OPTS} \
+                   -o "${accession}_2.fastq.gz" \
+                   "\${url_r2}" \
+               && [ -s "${accession}_2.fastq.gz" ] \
+               && gzip -t "${accession}_2.fastq.gz" 2>/dev/null
+            then
+
                 ena_ok=1
-                echo "[Strategy 1] R1 downloaded from ENA." >&2
+                echo "[Strategy 1] R1 + R2 downloaded and validated from ENA." >&2
 
-                if aria2c \$ARIA_OPTS -o "${accession}_2.fastq.gz" "${base}/${accession}_2.fastq.gz"; then
-                    if ! gzip -t "${accession}_2.fastq.gz" 2>/dev/null; then
-                        rm -f "${accession}_2.fastq.gz"
-                    fi
-                fi
             else
-                rm -f "${accession}_1.fastq.gz" "${accession}_2.fastq.gz"
+
+                echo "[Strategy 1] PE download incomplete/corrupt — clearing and using NCBI fallback." >&2
+
+                rm -f "${accession}_1.fastq.gz"
+                rm -f "${accession}_2.fastq.gz"
+
             fi
+
+        # ---------------------------------------------------------------------
+        # SE: only R1 is required
+        # ---------------------------------------------------------------------
+
+        else
+
+            rm -f "${accession}_1.fastq.gz"
+
+            if aria2c \${ARIA_OPTS} \
+                   -o "${accession}_1.fastq.gz" \
+                   "\${url_se}" \
+               && [ -s "${accession}_1.fastq.gz" ] \
+               && gzip -t "${accession}_1.fastq.gz" 2>/dev/null
+            then
+
+                ena_ok=1
+                echo "[Strategy 1] SE R1 downloaded and validated from ENA." >&2
+
+            else
+
+                echo "[Strategy 1] SE download incomplete/corrupt — clearing and using NCBI fallback." >&2
+
+                rm -f "${accession}_1.fastq.gz"
+
+            fi
+
         fi
+
     else
-        echo "[Strategy 1] aria2c not found in container. Skipping to Strategy 2..." >&2
+
+        echo "[Strategy 1] Skipped (aria2c unavailable or ENA layout unknown)." >&2
+
     fi
 
-    # ─── Strategy 2: prefetch fallback (If ENA is missing or skipped) ───────
-    if [ "\$ena_ok" -eq 0 ]; then
-        echo "[Strategy 2] Using official NCBI prefetch + fasterq-dump..." >&2
-        
-        # Safely wrap with timeout if available, otherwise run directly
-        if command -v timeout &> /dev/null; then
-            timeout ${prefetch_t_out} prefetch --max-size ${prefetch_size} "${accession}" || exit 1
-            timeout ${fasterq_t_out} fasterq-dump --split-files --threads ${task.cpus} --temp . "${accession}" || exit 1
+    # -------------------------------------------------------------------------
+    # Strategy 2: NCBI prefetch + fasterq-dump
+    # -------------------------------------------------------------------------
+
+    if [ "\${ena_ok}" -eq 0 ]; then
+
+        echo "[Strategy 2] Using NCBI prefetch + fasterq-dump..." >&2
+
+        rm -f "${accession}_1.fastq.gz"
+        rm -f "${accession}_2.fastq.gz"
+
+        if command -v timeout &>/dev/null; then
+
+            timeout ${prefetch_t_out} \
+                prefetch \
+                --max-size ${prefetch_size} \
+                "${accession}" \
+                || exit 1
+
+            timeout ${fasterq_t_out} \
+                fasterq-dump \
+                --split-files \
+                --threads ${task.cpus} \
+                --temp . \
+                "${accession}" \
+                || exit 1
+
         else
-            prefetch --max-size ${prefetch_size} "${accession}" || exit 1
-            fasterq-dump --split-files --threads ${task.cpus} --temp . "${accession}" || exit 1
+
+            prefetch \
+                --max-size ${prefetch_size} \
+                "${accession}" \
+                || exit 1
+
+            fasterq-dump \
+                --split-files \
+                --threads ${task.cpus} \
+                --temp . \
+                "${accession}" \
+                || exit 1
+
         fi
-        
+
         rm -rf "${accession}/" || true
 
-        if command -v pigz &>/dev/null; then ZIPCMD="pigz -p ${task.cpus}"; else ZIPCMD="gzip"; fi
-        [ -f "${accession}_1.fastq" ] && \$ZIPCMD "${accession}_1.fastq"
-        [ -f "${accession}.fastq" ]   && mv "${accession}.fastq" "${accession}_1.fastq" && \$ZIPCMD "${accession}_1.fastq"
-        [ -f "${accession}_2.fastq" ] && \$ZIPCMD "${accession}_2.fastq"
+        if command -v pigz &>/dev/null; then
+            ZIPCMD="pigz -p ${task.cpus}"
+        else
+            ZIPCMD="gzip"
+        fi
+
+        if [ -f "${accession}_1.fastq" ]; then
+            \${ZIPCMD} "${accession}_1.fastq"
+        fi
+
+        if [ -f "${accession}.fastq" ] && [ ! -f "${accession}_1.fastq.gz" ]; then
+            mv "${accession}.fastq" "${accession}_1.fastq"
+            \${ZIPCMD} "${accession}_1.fastq"
+        fi
+
+        if [ -f "${accession}_2.fastq" ]; then
+            \${ZIPCMD} "${accession}_2.fastq"
+        fi
+
     fi
 
-    # ─── Validation ───────────────────────────────────────────────────────
-    if [ ! -s "${accession}_1.fastq.gz" ] || ! gzip -t "${accession}_1.fastq.gz" 2>/dev/null; then
-        echo "ERROR: Download failed or corrupt." >&2
+    # -------------------------------------------------------------------------
+    # Final validation: R1 is always required
+    # -------------------------------------------------------------------------
+
+    if [ ! -s "${accession}_1.fastq.gz" ] \
+       || ! gzip -t "${accession}_1.fastq.gz" 2>/dev/null
+    then
+
+        echo "ERROR: R1 missing or corrupt for ${accession}." >&2
+        echo "       Failing task so Nextflow can retry." >&2
+
         exit 1
+
     fi
-    [ ! -f "${accession}_2.fastq.gz" ] && touch "${accession}_2.fastq.gz"
-    echo "=== FETCH_SRA COMPLETE ===" >&2
+
+    # -------------------------------------------------------------------------
+    # Final validation for PE runs
+    # -------------------------------------------------------------------------
+
+    if [ "\${layout}" = "PE" ]; then
+
+        if [ ! -s "${accession}_2.fastq.gz" ] \
+           || ! gzip -t "${accession}_2.fastq.gz" 2>/dev/null
+        then
+
+            echo "ERROR: ${accession} is paired-end according to ENA," >&2
+            echo "       but R2 is missing or corrupt." >&2
+            echo "       Failing task so Nextflow can retry." >&2
+
+            exit 1
+
+        fi
+
+        echo "=== FETCH_SRA COMPLETE (PE) ===" >&2
+
+    else
+
+        # Genuine SE runs retain the existing empty-R2 interface.
+        if [ -s "${accession}_2.fastq.gz" ] \
+           && gzip -t "${accession}_2.fastq.gz" 2>/dev/null
+        then
+
+            echo "=== FETCH_SRA COMPLETE (PE via NCBI split) ===" >&2
+
+        else
+
+            rm -f "${accession}_2.fastq.gz"
+            touch "${accession}_2.fastq.gz"
+
+            echo "=== FETCH_SRA COMPLETE (SE) ===" >&2
+
+        fi
+
+    fi
     """
 }
 

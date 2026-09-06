@@ -18,7 +18,7 @@ process FILTER_SNPS {
     tag "${strain_id} - SNPs"
     label 'high'
     
-    publishDir "${params.outdir}/Variant_Filtration/SNPs", mode: 'copy', enabled: params.keep_snp_vcf
+    publishDir "${params.outdir}/Variant_Filtration/SNPs", mode: 'symlink', enabled: params.keep_snp_vcf
 
     input:
     tuple val(strain_id), path(raw_vcf), path(raw_vcf_index)
@@ -87,7 +87,7 @@ process FILTER_INDELS {
     tag "${strain_id} - INDELs"
     label 'high'
     
-    publishDir "${params.outdir}/Variant_Filtration/INDELs", mode: 'copy', enabled: params.keep_indel_vcf
+    publishDir "${params.outdir}/Variant_Filtration/INDELs", mode: 'symlink', enabled: params.keep_indel_vcf
     
     input:
     tuple val(strain_id), path(raw_vcf), path(raw_vcf_index)
@@ -158,7 +158,7 @@ process MERGE_AND_CLEAN {
     tag "${strain_id} - Merge & QC"
     label 'high'  
     
-    publishDir "${params.outdir}/Variant_Filtration/Final_Merged", mode: 'copy', enabled: params.keep_merged_vcf
+    publishDir "${params.outdir}/Variant_Filtration/Final_Merged", mode: 'symlink', enabled: params.keep_merged_vcf
 
     input:
     tuple val(strain_id), path(snp_vcf), path(snp_tbi), path(indel_vcf), path(indel_tbi)

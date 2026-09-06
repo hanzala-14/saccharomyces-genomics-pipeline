@@ -12,7 +12,7 @@ process GENOMICSDB_IMPORT {
     label 'high'
     
     // publishDir with overwrite: true allows Nextflow to safely replace the old DB folder
-    publishDir path: { "${params.outdir}/Joint_Genotyping/${chrom}" }, mode: 'copy', overwrite: true
+    publishDir path: { "${params.outdir}/Joint_Genotyping/${chrom}" }, mode: 'symlink', overwrite: true
 
     errorStrategy { task.exitStatus in [137, 143, 247] ? 'retry' : 'finish' }
     maxRetries 2
@@ -103,7 +103,7 @@ process GENOTYPE_GVCFS {
     tag { "Chr: ${chrom}" }
     label 'high'
     
-    publishDir path: { "${params.outdir}/Joint_Genotyping/${chrom}" }, mode: 'copy', pattern: "cohort.*"
+    publishDir path: { "${params.outdir}/Joint_Genotyping/${chrom}" }, mode: 'symlink', pattern: "cohort.*"
 
     errorStrategy { task.exitStatus in [137, 143, 247] ? 'retry' : 'finish' }
     maxRetries 2
@@ -144,7 +144,7 @@ process MERGE_VCFS {
     tag { "Merging: ${prefix}" }
     label 'medium'
     
-    publishDir path: "${params.outdir}/Joint_Genotyping/Final_Merged", mode: 'copy', overwrite: true
+    publishDir path: "${params.outdir}/Joint_Genotyping/Final_Merged", mode: 'symlink', overwrite: true
 
     input:
     tuple val(prefix), path(vcfs), path(tbis)

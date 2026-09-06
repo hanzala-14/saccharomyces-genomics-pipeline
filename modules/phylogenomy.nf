@@ -13,7 +13,7 @@ process PREP_ALLELES {
     label 'low'
     
     // Publishes the tables cleanly categorized by strain cohort (if enabled in config)
-    publishDir path: { "${params.outdir}/Phylogeny/Allele_Tables/${strain_id}" }, mode: 'copy', enabled: params.keep_allele_tables
+    publishDir path: { "${params.outdir}/Phylogeny/Allele_Tables/${strain_id}" }, mode: 'symlink', enabled: params.keep_allele_tables
 
     input:
     tuple val(strain_id), path(master_vcf), path(master_tbi)
@@ -163,7 +163,7 @@ process RUN_IBS {
     stageInMode 'copy'
 
     // Publish only the final matrices
-    publishDir path: { "${params.outdir}/Phylogeny/Distance_Matrices/${strain_id}" }, mode: 'copy', pattern: 'ibs_outputs/*'
+    publishDir path: { "${params.outdir}/Phylogeny/Distance_Matrices/${strain_id}" }, mode: 'symlink', pattern: 'ibs_outputs/*'
 
     input:
     tuple val(strain_id), path(samples), path(allele1), path(allele2)
