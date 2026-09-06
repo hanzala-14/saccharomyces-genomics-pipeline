@@ -275,8 +275,8 @@ process MARKDUP {
     tag "${strain_id}"
     label 'medium'
 
-    publishDir "${params.outdir}/mapped/strains", mode: 'copy', pattern: '*.mdup.bam*'
-    publishDir "${params.outdir}/mapped/stats",   mode: 'copy', pattern: '*.metrics.txt'
+    publishDir "${params.outdir}/Mapped/strains", mode: 'copy', pattern: '*.mdup.bam*'
+    publishDir "${params.outdir}/Mapped/stats",   mode: 'copy', pattern: '*.metrics.txt'
 
     input:
     tuple val(strain_id), path(sorted_bam)
@@ -319,7 +319,7 @@ process MAPPING_STATS {
     tag "${strain_id}"
     label 'tiny'
 
-    publishDir "${params.outdir}/mapped/stats", mode: 'copy'
+    publishDir "${params.outdir}/Mapped/stats", mode: 'copy'
 
     input:
     tuple val(strain_id), path(bam), path(bai)
@@ -346,7 +346,7 @@ process WRITE_MAPPING_SUMMARY {
     tag "mapping_summary"
     label 'tiny'
 
-    publishDir "${params.outdir}/mapped", mode: 'copy'
+    publishDir "${params.outdir}/Mapped", mode: 'copy'
 
     input:
     val(flagstat_files)
