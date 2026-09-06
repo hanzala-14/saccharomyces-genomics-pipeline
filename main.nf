@@ -22,6 +22,7 @@ include {
     BWA_INDEX
     MAP_PE
     MAP_SE
+    MERGE_STRAIN_BAMS
     MARKDUP
     MAPPING_STATS
     WRITE_MAPPING_SUMMARY
@@ -197,8 +198,6 @@ workflow {
     // MODULE 2: Read Filtration (fastp)
     // =========================================================================
 
-    // Both channels are safe to pass even if empty — Nextflow will simply
-    // not schedule the process if no items arrive. No hang, no error.
     FILTER_PE(MERGE_PE.out.merged_pe)
     FILTER_SE(MERGE_SE.out.merged_se)
 
@@ -216,11 +215,10 @@ workflow {
     WRITE_FILTER_SUMMARY(pe_jsons, se_jsons)
 
     // =========================================================================
-    // MODULE 3: BWA Mapping, Duplicate Marking & Alignment QC
+    // MODULE 3: BWA Mapping, Strain-Level BAM Merging & Duplicate Marking
     // =========================================================================
 
     // --- Reference genome preparation ---
-    // Two modes: local reference (preferred) or auto-fetch from NCBI
     if (params.reference) {
         ref_fasta = channel.fromPath(params.reference, checkIfExists: true)
     } else if (params.genome_id) {
@@ -231,7 +229,6 @@ workflow {
     }
 
     // --- Index reference (smart: detects if already indexed) ---
-    // Check if BWA index files already exist alongside the FASTA
     ref_needs_index = ref_fasta.map { fasta ->
         def bwt = file("${fasta}.bwt")
         if (bwt.exists()) {
@@ -259,15 +256,38 @@ workflow {
     indexed_reference = ref_already_indexed.mix(BWA_INDEX.out.indexed_ref)
 
     // --- Map PE reads ---
-    MAP_PE(FILTER_PE.out.filtered_pe, indexed_reference.collect())
-    MAP_SE(FILTER_SE.out.filtered_se, indexed_reference.collect())
+    MAP_PE(
+        FILTER_PE.out.filtered_pe,
+        indexed_reference.collect()
+    )
 
-    // --- Merge PE and SE BAM streams into unified stream ---
-    all_sorted_bams = MAP_PE.out.sorted_bam.mix(MAP_SE.out.sorted_bam)
+    // --- Map SE reads ---
+    MAP_SE(
+        FILTER_SE.out.filtered_se,
+        indexed_reference.collect()
+    )
+
+    // =========================================================================
+    // IMPORTANT: Reconcile PE and SE mappings at the strain level
+    // =========================================================================
+    //
+    // PE_ONLY  -> one PE BAM
+    // SE_ONLY  -> one SE BAM
+    // MIXED    -> one PE BAM + one SE BAM -> merged into ONE strain BAM
+    //
+    // The grouping is performed by strain_id so that exactly one BAM enters
+    // MARKDUP for each biological strain.
+    // =========================================================================
+
+    all_sorted_bams = MAP_PE.out.sorted_bam
+        .mix(MAP_SE.out.sorted_bam)
+        .groupTuple(by: 0)
+
+    MERGE_STRAIN_BAMS(all_sorted_bams)
 
     // --- Mark duplicates ---
-    // Reads are already merged by strain in Module 1, so each strain is a single BAM emission
-    MARKDUP(all_sorted_bams)
+    // Exactly ONE strain-level sorted BAM per strain enters MARKDUP.
+    MARKDUP(MERGE_STRAIN_BAMS.out.merged_bam)
 
     // --- Collect mapping stats ---
     MAPPING_STATS(MARKDUP.out.markdup_bam)
@@ -304,7 +324,7 @@ workflow {
     // =========================================================================
     // MODULE 5: Variant Calling (GATK HaplotypeCaller)
     // =========================================================================
-    
+
     // Extract just the FASTA from Module 3's reference channel
     gatk_fasta_ch = indexed_reference.map { fasta, _idx -> fasta }
 
@@ -317,7 +337,7 @@ workflow {
         .map { _fasta, fai, _dict -> fai }
         .splitCsv(sep: '\t')
         .map { row -> row[0] }
-        .filter { chrom -> 
+        .filter { chrom ->
             if (!params.include_extrachromosomal) {
                 // Drop any chromosome ending in _M or _P if the switch is false
                 return !(chrom.endsWith('_M') || chrom.endsWith('_P'))
@@ -325,26 +345,27 @@ workflow {
             return true
         }
 
-    // Scatter: 1 BAM × N Chromosomes 
+    // Scatter: 1 strain-level BAM × N chromosomes
     hc_input = MARKDUP.out.markdup_bam.combine(chromosomes_ch)
 
-    // params.ploidy_map is read internally in the module
     HAPLOTYPE_CALLER(
-        hc_input, 
+        hc_input,
         PREPARE_GATK_REF.out.gatk_ref.collect()
     )
 
     // Gather: Group outputs by strain_id and generate manifest
-    GATHER_STRAIN_GVCFS(HAPLOTYPE_CALLER.out.gvcf.groupTuple(by: 0))
+    GATHER_STRAIN_GVCFS(
+        HAPLOTYPE_CALLER.out.gvcf.groupTuple(by: 0)
+    )
 
     // =========================================================================
     // MODULE 6: JOINT GENOTYPING
     // =========================================================================
-    
+
     // Group Module 5 output by chromosome
     ch_for_genomicsdb = HAPLOTYPE_CALLER.out.gvcf
-    .map { _strain_id, chrom, gvcf, tbi -> tuple(chrom, gvcf, tbi) }    
-    .groupTuple(by: 0)
+        .map { _strain_id, chrom, gvcf, tbi -> tuple(chrom, gvcf, tbi) }
+        .groupTuple(by: 0)
 
     // 6A: Build or Update the Database
     GENOMICSDB_IMPORT(
@@ -357,20 +378,20 @@ workflow {
         GENOMICSDB_IMPORT.out.db,
         PREPARE_GATK_REF.out.gatk_ref.collect()
     )
-    
+
     // 6C: Intelligent Subgenome Merging (Sensu Stricto Universal)
     if (params.merge_strategy == 'separate') {
         ch_for_merge = GENOTYPE_GVCFS.out.cohort_vcf
-            .map { chrom, vcf, tbi -> 
+            .map { chrom, vcf, tbi ->
                 // Split the chromosome name by the underscore
                 def parts = chrom.tokenize('_')
                 def prefix = parts[0]
                 def suffix = parts.size() > 1 ? parts[1] : ""
-                
+
                 // 1. Map the prefix to the species name
                 def species_name = params.species_map.get(prefix, "${prefix}_other")
-                def final_prefix = species_name // Default to bundled
-                
+                def final_prefix = species_name
+
                 // 2. Apply the extrachromosomal isolation logic if requested
                 if (params.extrachromosomal_strategy == 'isolated') {
                     if (suffix.startsWith('M')) {
@@ -381,7 +402,7 @@ workflow {
                         final_prefix = "${species_name}_nuclear"
                     }
                 }
-                
+
                 tuple(final_prefix, vcf, tbi)
             }
             .groupTuple(by: 0)
@@ -398,15 +419,23 @@ workflow {
     // =========================================================================
     // MODULE 7: VARIANT FILTRATION & QC
     // =========================================================================
-    
-    // Load the intervals file (with a safety check so it crashes instantly if missing)
+
+    // Load the intervals file
     ch_intervals = file(params.repetitive_intervals, checkIfExists: true)
 
     // Extract the individual reference files from Module 5's prepared GATK bundle
-    // We use .first() so Nextflow knows it can reuse these files endlessly
-    ch_fasta_clean = PREPARE_GATK_REF.out.gatk_ref.map { fasta, _fai, _dict -> fasta }.first()
-    ch_fai_clean   = PREPARE_GATK_REF.out.gatk_ref.map { _fasta, fai, _dict -> fai }.first()
-    ch_dict_clean  = PREPARE_GATK_REF.out.gatk_ref.map { _fasta, _fai, dict -> dict }.first()
+    ch_fasta_clean = PREPARE_GATK_REF.out.gatk_ref
+        .map { fasta, _fai, _dict -> fasta }
+        .first()
+
+    ch_fai_clean = PREPARE_GATK_REF.out.gatk_ref
+        .map { _fasta, fai, _dict -> fai }
+        .first()
+
+    ch_dict_clean = PREPARE_GATK_REF.out.gatk_ref
+        .map { _fasta, _fai, dict -> dict }
+        .first()
+
     // 1. Launch SNP and INDEL filtering simultaneously on the merged cohort VCFs
     FILTER_SNPS(
         MERGE_VCFS.out,
@@ -424,7 +453,7 @@ workflow {
         ch_intervals
     )
 
-    // 2. The Join Operator: Wait for both to finish, then match them by cohort name (by: 0)
+    // 2. Join SNP and INDEL filtering outputs by cohort name
     ch_filtered_joined = FILTER_SNPS.out.filtered_snps
         .join(FILTER_INDELS.out.filtered_indels, by: 0)
 
@@ -435,18 +464,22 @@ workflow {
         ch_fai_clean,
         ch_dict_clean
     )
-    
+
     // =========================================================================
     // MODULE 8: PHYLOGENOMICS (IBSx & Tree Building)
     // =========================================================================
-    
+
     if (params.run_phylogeny) {
         // Explicitly pass the bin/ directory to avoid Docker symlink crashes
         ch_custom_scripts = file("${projectDir}/bin")
 
         // 1. Slice the clean VCFs into allele tables
         PREP_ALLELES(MERGE_AND_CLEAN.out.final_vcf)
+
         // 2. Generate IBS Distance Matrices using the C++ engine
-        RUN_IBS(PREP_ALLELES.out.allele_tables, ch_custom_scripts)
+        RUN_IBS(
+            PREP_ALLELES.out.allele_tables,
+            ch_custom_scripts
+        )
     }
 }
