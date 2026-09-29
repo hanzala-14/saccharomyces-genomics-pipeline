@@ -32,7 +32,7 @@ process FETCH_REFERENCE {
     tag "${genome_id}"
     label 'base'
 
-    publishDir "${params.outdir}/reference", mode: 'copy'
+    publishDir "${params.outdir}/reference", mode: 'symlink'
 
     input:
     val(genome_id)
@@ -42,7 +42,6 @@ process FETCH_REFERENCE {
 
     script:
     """
-    #!/usr/bin/env bash
     set -euo pipefail
 
     # Resolve NCBI FTP path from assembly accession
@@ -90,12 +89,10 @@ process BWA_INDEX {
 
     script:
     """
-    #!/usr/bin/env bash
     set -euo pipefail
 
     echo "[BWA_INDEX] Indexing ${fasta}"
 
-    # BWA index
     bwa index ${fasta}
 
     echo "[BWA_INDEX] Indexing complete: \$(ls ${fasta}.*)"
@@ -118,7 +115,6 @@ process MAP_PE {
     def rg = "@RG\\tID:${strain_id}_${r1.simpleName}\\tSM:${strain_id}\\tPL:ILLUMINA\\tLB:${strain_id}_lib1\\tPU:${strain_id}_unit1"
 
     """
-    #!/usr/bin/env bash
     set -euo pipefail
 
     bwa mem \\
@@ -155,7 +151,6 @@ process MAP_SE {
     def rg = "@RG\\tID:${strain_id}_${se.simpleName}\\tSM:${strain_id}\\tPL:ILLUMINA\\tLB:${strain_id}_lib1\\tPU:${strain_id}_unit1"
 
     """
-    #!/usr/bin/env bash
     set -euo pipefail
 
     bwa mem \\
@@ -270,13 +265,12 @@ process MERGE_STRAIN_BAMS {
     """
 }
 
-
 process MARKDUP {
     tag "${strain_id}"
     label 'medium'
 
-    publishDir "${params.outdir}/Mapped/strains", mode: 'copy', pattern: '*.mdup.bam*'
-    publishDir "${params.outdir}/Mapped/stats",   mode: 'copy', pattern: '*.metrics.txt'
+    publishDir "${params.outdir}/mapped/strains", mode: 'symlink', pattern: '*.mdup.bam*'
+    publishDir "${params.outdir}/mapped/stats",   mode: 'copy',    pattern: '*.metrics.txt'
 
     input:
     tuple val(strain_id), path(sorted_bam)
@@ -287,39 +281,69 @@ process MARKDUP {
 
     script:
     """
-    #!/usr/bin/env bash
     set -euo pipefail
 
-    # 1. Group by read name.
-    samtools collate -o name_collate.bam ${sorted_bam}
+    mkdir -p tmp
 
-    # 2. Add mate score tags.
-    samtools fixmate -m name_collate.bam fixmate.bam
+    cleanup() {
+    rm -rf tmp
+    }
 
-    # 3. Coordinate sort again.
-    samtools sort -o coord_sorted.bam fixmate.bam
+    trap cleanup EXIT
 
-    # 4. Mark duplicates.
-    samtools markdup -s coord_sorted.bam ${strain_id}.mdup.bam 2> ${strain_id}.mdup.metrics.txt
+    # 1. Name-collate using task-local temporary files.
+    samtools collate \
+    -@ ${task.cpus} \
+    -O \
+    -u \
+    ${strain_id}.sorted.bam \
+    tmp/collate \
+    | samtools fixmate \
+    -@ ${task.cpus} \
+    -m \
+    -u \
+    - \
+    - \
+    | samtools sort \
+    -@ ${task.cpus} \
+    -T tmp/sort \
+    -u \
+    - \
+    -o ${strain_id}.coord_sorted.bam
 
-    # 5. Index the final BAM.
-    samtools index ${strain_id}.mdup.bam
+    # 2. Mark duplicates.
+    samtools markdup \
+    -@ ${task.cpus} \
+    -s \
+    ${strain_id}.coord_sorted.bam \
+    ${strain_id}.mdup.bam \
+    2> ${strain_id}.mdup.metrics.txt
 
-    # Clean up intermediate files to save space.
-    rm name_collate.bam fixmate.bam coord_sorted.bam
+    # 3. Index.
+    samtools index \
+    -@ ${task.cpus} \
+    ${strain_id}.mdup.bam
+
+    # 4. Validate BAM.
+    samtools quickcheck \
+    ${strain_id}.mdup.bam
 
     READS=\$(samtools view -c -F 1024 ${strain_id}.mdup.bam)
 
+    if [ "\${READS}" -eq 0 ]; then
+    echo "ERROR: ${strain_id} produced 0 non-duplicate reads" >&2
+    exit 1
+    fi
+
     echo "[MARKDUP] ${strain_id}: \${READS} non-duplicate reads, BAM indexed"
     """
-}
-
+    }
 
 process MAPPING_STATS {
     tag "${strain_id}"
     label 'tiny'
 
-    publishDir "${params.outdir}/Mapped/stats", mode: 'copy'
+    publishDir "${params.outdir}/mapped/stats", mode: 'copy'
 
     input:
     tuple val(strain_id), path(bam), path(bai)
@@ -331,7 +355,6 @@ process MAPPING_STATS {
 
     script:
     """
-    #!/usr/bin/env bash
     set -euo pipefail
 
     samtools flagstat ${bam} > ${strain_id}.flagstat.txt
@@ -346,7 +369,7 @@ process WRITE_MAPPING_SUMMARY {
     tag "mapping_summary"
     label 'tiny'
 
-    publishDir "${params.outdir}/Mapped", mode: 'copy'
+    publishDir "${params.outdir}/mapped", mode: 'copy'
 
     input:
     val(flagstat_files)
@@ -358,8 +381,8 @@ process WRITE_MAPPING_SUMMARY {
 
     script:
     """
-    #!/usr/bin/env python3
-    import os, re
+    python3 - <<'PY'
+    import os
 
     header = "strain_id\\ttotal_reads\\tmapped_reads\\tmapped_pct\\tproperly_paired_pct\\tsingletons_pct\\tduplicate_pct\\tinsert_size_mean\\tstatus"
     rows = []
@@ -393,7 +416,6 @@ process WRITE_MAPPING_SUMMARY {
         paired_pct = (paired / total * 100) if total > 0 else 0
         single_pct = (singletons / total * 100) if total > 0 else 0
 
-        # Parse duplicate rate from metrics file.
         dup_pct = 0.0
         metrics_f = f.replace('.flagstat.txt', '.mdup.metrics.txt')
 
@@ -420,7 +442,6 @@ process WRITE_MAPPING_SUMMARY {
                             break
                 break
 
-        # Parse insert size from samtools stats.
         insert_mean = "NA"
 
         for sf in stats_list:
@@ -434,7 +455,6 @@ process WRITE_MAPPING_SUMMARY {
                             break
                 break
 
-        # Status determination.
         status = "PASS"
 
         if min_mapping_pct > 0 and mapped_pct < min_mapping_pct:
@@ -452,7 +472,6 @@ process WRITE_MAPPING_SUMMARY {
         for r in sorted(rows):
             out.write(r + '\\n')
 
-    # Report warnings.
     warn_count = sum(1 for r in rows if 'WARN' in r)
 
     print(
@@ -460,5 +479,6 @@ process WRITE_MAPPING_SUMMARY {
         f"{len(rows)} strains processed, "
         f"{warn_count} warnings"
     )
+    PY
     """
 }
