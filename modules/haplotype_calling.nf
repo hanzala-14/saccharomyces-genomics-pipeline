@@ -23,8 +23,8 @@ process PREPARE_GATK_REF {
     # 1. Create .fai index using Samtools
     samtools faidx "${fasta}"
     
-    # 2. Create .dict using Picard
-    picard CreateSequenceDictionary R="${fasta}" O="${dict_name}"
+    # 2. Create .dict using GATK
+    gatk CreateSequenceDictionary R="${fasta}" O="${dict_name}"
     """
 }
 
@@ -32,7 +32,7 @@ process HAPLOTYPE_CALLER {
     tag { "${strain_id}:${chrom}" }
     label 'calling'
     
-    publishDir path: { "${params.outdir}/Haplotype_Calling/${strain_id}" }, mode: 'copy'
+    publishDir path: { "${params.outdir}/Haplotype_Calling/${strain_id}" }, mode: 'symlink'
 
     errorStrategy { task.exitStatus in [137, 143, 247] ? 'retry' : 'finish' }
     maxRetries 2
@@ -83,7 +83,7 @@ process GATHER_STRAIN_GVCFS {
     label 'tiny'
     
     // Wrap the publishDir path in a closure by adding "path: { ... }"
-    publishDir path: { "${params.outdir}/Haplotype_Calling/${strain_id}" }, mode: 'copy'
+    publishDir path: { "${params.outdir}/Haplotype_Calling/${strain_id}" }, mode: 'symlink'
 
     input:
     tuple val(strain_id), val(chroms), path(gvcfs), path(tbis)

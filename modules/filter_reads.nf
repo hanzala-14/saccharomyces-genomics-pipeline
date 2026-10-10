@@ -20,10 +20,9 @@
 process FILTER_PE {
     tag "${strain_id}"
     label 'base'
-    container 'biocontainers/fastp:1.3.6--h5f740d0_0'
 
-    publishDir "${params.outdir}/filtration/filtered", mode: 'copy', pattern: '*.filt.*.fastq.gz'
-    publishDir "${params.outdir}/filtration/reports",  mode: 'copy', pattern: '*.{html,json}'
+    publishDir "${params.outdir}/Filtration/filtered", mode: 'symlink', pattern: '*.filt.*.fastq.gz'
+    publishDir "${params.outdir}/Filtration/reports",  mode: 'symlink', pattern: '*.{html,json}'
 
     input:
     tuple val(strain_id), path(r1), path(r2)
@@ -93,10 +92,9 @@ process FILTER_PE {
 process FILTER_SE {
     tag "${strain_id}"
     label 'base'
-    container 'biocontainers/fastp:1.3.6--h5f740d0_0'
 
-    publishDir "${params.outdir}/filtration/filtered", mode: 'copy', pattern: '*.filt.SE.fastq.gz'
-    publishDir "${params.outdir}/filtration/reports",  mode: 'copy', pattern: '*.{html,json}'
+    publishDir "${params.outdir}/Filtration/filtered", mode: 'symlink', pattern: '*.filt.SE.fastq.gz'
+    publishDir "${params.outdir}/Filtration/reports",  mode: 'symlink', pattern: '*.{html,json}'
 
     input:
     tuple val(strain_id), path(se)
@@ -155,7 +153,7 @@ process WRITE_FILTER_SUMMARY {
     tag "filter_summary"
     label 'tiny'
 
-    publishDir "${params.outdir}/filtration", mode: 'copy'
+    publishDir "${params.outdir}/Filtration", mode: 'symlink'
 
     input:
     val(pe_json_list)

@@ -7,9 +7,8 @@
 process COMPUTE_COVERAGE {
     tag "${strain_id}"
     label 'low'
-    container 'biocontainers/bedtools:2.31.1--hcb2786e_0'
 
-    publishDir "${params.outdir}/coverage", mode: 'copy', pattern: '*.slidingwindow.tab'
+    publishDir "${params.outdir}/Coverage", mode: 'symlink', pattern: '*.slidingwindow.tab'
 
     input:
     tuple val(strain_id), path(bam), path(bai)

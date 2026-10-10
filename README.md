@@ -3,96 +3,63 @@
 
 #  Saccharomyces Genomics Pipeline
 
-A production-grade, fault-tolerant, and highly optimized Whole Genome Sequencing (WGS) variant calling and comparative phylogenomics pipeline engineered for the *Saccharomyces* genus, with a primary focus on historic lager yeast lineages and large-scale strain compendiums.
+**A highly optimized Nextflow DSL2 workflow for population-scale WGS variant calling and phylogenomics of the *Saccharomyces sensu stricto* complex.**
 
-Designed to scale seamlessly from local development to massive High-Performance Computing (HPC) clusters handling thousands of genomes.
+ [Pipeline Architecture](#pipeline-architecture) · [Quick Start](#quick-start) · [Configuration](#system-configuration) · [Module Documentation](#module-documentation)
 
 ---
 
-##  Pipeline Architecture & Workflow
+## Overview
 
-The pipeline is organized into modular, independently testable Nextflow sub-workflows, scaling from raw data acquisition to deep genomic profiling and population-scale joint genotyping.
+The **Saccharomyces Genomics Pipeline (v2.1.8)** is a production-grade bioinformatics workflow designed to process raw whole-genome sequencing (WGS) data into high-confidence variant calls and evolutionary distance matrices.
+
+Strictly adhering to GATK Best Practices, the pipeline is engineered to handle the complex genomic architectures of yeast, including dynamic organelle ploidies and multi-species hybridization, while maintaining high computational efficiency through memory-piped alignments and OpenMP-accelerated C++ backend processing.
+
+### Core Capabilities
+
+* **Subgenome Routing:** Automatically parses chromosomal prefixes via a configurable `species_map` to route subgenomes (e.g., *S. cerevisiae*, *S. eubayanus*) into isolated master VCFs, preventing cross-contamination in hybrid strains.
+* **Dynamic Ploidy Resolution:** Utilizes a `ploidy_map` during GATK `HaplotypeCaller` execution to dynamically apply haploid models to mitochondrial and plasmid DNA while maintaining diploid models for nuclear chromosomes.
+* **Zero-I/O Alignment:** Prevents massive intermediate disk writes by piping BWA-MEM alignments directly into SAMtools coordinate sorting (`bwa mem | samtools view -Sb | samtools sort`).
+* **Incremental Joint Genotyping:** Features the ability to inject newly sequenced strains into historical `GenomicsDB` workspaces without the computational overhead of re-importing legacy data.
+* **Vectorized Phylogenomics:** Bypasses Java memory bottlenecks by converting VCFs into vectorized allele tables via `awk`, feeding an embedded R/C++ Identity-by-State (IBS) engine to calculate exact pairwise genetic distances.
+
+---
+
+## Pipeline Architecture
+
+The workflow is constructed from 8 discrete, modular Nextflow sub-workflows, ensuring robust error handling, scatter-gather parallelization, and precise resource allocation.
 
 ```mermaid
 graph TD
-    classDef active fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#000;
-    classDef optional fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000;
-    classDef future fill:#f5f5f5,stroke:#616161,stroke-width:2px,stroke-dasharray: 5 5,color:#555;
+    classDef core fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#000;
+    classDef gatk fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000;
+    classDef downstream fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#000;
 
-    A[Samplesheet / ENA Accessions] -->|Module 1| B(Data Acquisition & QC)
-    B -->|Filtered Fastqs| C(Module 2: Read Filtration fastp)
-    C -->|Clean Reads| D(Module 3: Piped BWA Mapping & Samtools Markdup)
+    A[Samplesheet / Accessions] -->|Module 1| B(Acquisition & QC)
+    B -->|Filtered Fastqs| C(Module 2: Read Filtration)
+    C -->|Clean Reads| D(Module 3: Mapping & Markdup)
     
-    D -->|run_coverage = true| E(Module 4: Coverage Profiling)
-    D -->|BAM Streams| F(Module 5: GATK Variant Calling)
+    D -.->|Optional| E[Module 4: Coverage Profiling]
+    D -->|BAM Streams| F(Module 5: HaplotypeCaller)
     
-    F -->|GVCFs| G(Module 6: Joint Genotyping & Merging)
-    G -->|Master VCFs| H(Future Module 7: Phylogenomics & SNPRelate)
+    F -->|Per-Chr GVCFs| G(Module 6: Joint Genotyping)
+    G -->|Subgenome VCFs| H(Module 7: Variant Filtration)
+    
+    H -->|Analysis-Ready VCFs| I(Module 8: Phylogenomics)
 
-    class B,C,D,F,G active;
-    class E optional;
-    class H future;
+    class A,B,C,D core;
+    class F,G,H gatk;
+    class I downstream;
 
 ```
 
 ---
 
-##  Implemented Core Modules (Modules 1–6)
+## Quick Start
 
-### [Module 1: Data Acquisition & QC Classification]
+### 1. Prerequisites
 
-* **High-Speed Downloads:** Primary ENA FTP retrieval via multi-threaded **`aria2c`** (`-x 16 -s 16`) to bypass server-side bandwidth throttling, backed by a secondary NCBI `prefetch` / `fasterq-dump` fallback.
-* **Strict Integrity:** Automated byte-level structural testing (`gzip -t`) with exponential retry back-offs.
-* **Smart Classification:** Automatically classifies runs into Paired-End (`PE_PASS`), Single-End fallback (`SE_FALLBACK`), or drops corrupt/invalid inputs while generating cohort-wide TSV summaries.
-
-### [Module 2: Read Filtration]
-
-* **Dual Streams:** Handles Paired-End (`FILTER_PE`) and Single-End (`FILTER_SE`) layouts independently through dedicated channel-driven processes.
-* **Post-Filter Safety:** Enforces strict non-empty read counts and gzip structural validation post-filtering.
-
-### [Module 3: Mapping, Duplicate Marking & Alignment QC]
-
-* **Zero Disk Bloat:** Implements piped streaming (`bwa mem ... | samtools view -Sb -F 4 - | samtools sort ...`) so intermediate uncompressed alignments never touch the disk.
-* **Pure-Samtools Duplicate Marking:** Completely bypasses memory-heavy Java/Picard tools (eliminating heap-space `OutOfMemoryError` crashes on local hardware) using a compiled low-level C workflow.
-
-### [Module 4: Genome Coverage Profiling (Optional Toggle)]
-
-* **Toggleable Execution:** Controlled via `params.run_coverage = true / false`. Skip coverage calculation during fast iterations, then flip it on and use Nextflow's `-resume` to backfill depth data instantly.
-* **Sliding Window Normalization:** Converts to bedGraph and calculates sliding window median coverage via `bedtools map` to eliminate local genomic noise.
-
-### [Module 5: Variant Calling (GATK HaplotypeCaller)]
-
-* **Dynamic Reference Agnosticism:** Completely eliminates hardcoded chromosome lists by dynamically parsing the `.fai` index on the fly, instantly scaling to any custom reference genome.
-* **Biological Ploidy Calibration:** Features a config-driven `ploidy_map` that identifies organelle contigs (Mitochondria/Plasmids) and strictly calls them as haploids (`-ploidy 1`), preserving statistical integrity while keeping nuclear DNA diploid.
-
-### [Module 6: Joint Genotyping & Subgenome Merging]
-
-* **Crash-Proof Database Updates:** Utilizes an atomic Bash wrapper for `GenomicsDBImport` that safely isolates existing databases during updates, guaranteeing zero data corruption in the event of network/compute crashes.
-* **Universal *Sensu Stricto* Routing:** Employs a config-based taxonomy dictionary (`species_map`) to automatically detect, isolate, and route individual subgenomes (e.g., *cerevisiae*, *eubayanus*, *paradoxus*) into clean, species-specific master VCFs.
-
----
-
-##  Upcoming Modules & Roadmap
-
-As the project scales toward comprehensive population genomics and evolutionary clock analysis, the following modules are currently in development:
-
-* **Module 7: Matrix Formatting & Phylogenomics**
-* Conversion of filtered VCFs into Genomic Data Structure (`.gds`) files via `SNPRelate`.
-* Calculation of Identity-by-State (IBS) distance matrices and Neighbor-Joining tree reconstruction via **SplitsTree**.
-
-
-
-
----
-
-## 💻 Quick Start
-
-### Prerequisites
-
-* [Nextflow](https://www.nextflow.io/docs/latest/getstarted.html) (`>=23.10.0`)
-* Container engine ([Docker](https://www.docker.com/) or [Singularity/Apptainer](https://apptainer.org/)) OR [Conda](https://docs.conda.io/)
-
-### 1. Clone the Repository
+Ensure you have [Nextflow](https://www.google.com/search?q=https://www.nextflow.io) (`>=23.10.0`) and a container engine (Docker, Singularity, or Conda) installed.
 
 ```bash
 git clone https://github.com/hanzala-14/saccharomyces-genomics-pipeline.git
@@ -100,113 +67,125 @@ cd saccharomyces-genomics-pipeline
 
 ```
 
-### 2. Prepare your Samplesheet (`samplesheet.csv`)
+### 2. Prepare the Samplesheet
 
-Create a CSV file defining your strains. You can mix ENA accessions and local FASTQ paths:
+Create a `samplesheet_new.csv` file. The pipeline natively supports the concurrent processing of local FASTQ paths and public ENA/SRA accessions.
 
 ```csv
 strain_id,accession,r1,r2
 Strain_A,SRR1234567,,
-Strain_B,,/path/to/local_R1.fastq.gz,/path/to/local_R2.fastq.gz
+Strain_B,,/data/local_R1.fastq.gz,/data/local_R2.fastq.gz
 
 ```
 
-### 3. Run the Pipeline
+### 3. Execute the Pipeline
+
+Run the workflow using the software profile that matches your computational environment. All tool dependencies are strictly pinned in `nextflow.config` to guarantee reproducibility.
 
 ```bash
-# Local Development
-nextflow run main.nf -profile conda
-
-# Production / HPC Cluster
+# Local Workstation (Docker)
 nextflow run main.nf -profile docker
 
+# HPC Cluster (Singularity)
+nextflow run main.nf -profile singularity
+
+# Local Environment (Conda)
+nextflow run main.nf -profile conda
+
 ```
 
 ---
 
-##  Advanced Usage: Incremental Updates & Compendiums
+## System Configuration
 
-This pipeline supports **incremental database ingestion**. If your lab maintains a massive compendium (e.g., a 5,000-strain GenomicsDB on an external office drive), you do **not** need to re-run historical data to joint-call new strains.
-
-To append new samples to an existing database:
-
-1. Create a samplesheet containing *only* your new strains.
-2. Run the pipeline, passing the parent directory of your existing databases to the `genomicsdb_update_path` flag:
-
-```bash
-nextflow run main.nf \
-  --samplesheet new_strains.csv \
-  --genomicsdb_update_path "/media/Office_Drive/Yeast_Compendium/Joint_Genotyping" \
-  -profile docker \
-  -resume
-
-```
-
-*Nextflow will fast-track the new strains to GVCFs, safely inject them into the existing massive compendium, and spit out updated Master VCFs in a fraction of the time.*
-
----
-
-## ⚙️ Configuration & Parameters
-
-All operational settings can be tuned inside `nextflow.config`:
+Pipeline execution is centrally managed via `nextflow.config`. Key parameters allow for precise control over hardware allocation, taxonomy dictionaries, and algorithmic thresholds.
 
 ```groovy
 params {
-    samplesheet       = 'samplesheet.csv'
-    outdir            = 'results'
+    // I/O & Execution
+    samplesheet              = 'samplesheet_new.csv'
+    outdir                   = 'results'
+    batch_size               = 50            // Throttles RAM usage during GenomicsDB import
+    ibs_block_rows           = 8192          // C++ Matrix RAM chunking
 
-    // Extracted Module 5 & 6 Configuration
-    ploidy = 2
-    ploidy_map = [ 'M': 1, 'P': 1 ] // Haploid organelles
-    include_extrachromosomal = true
-    
-    merge_strategy = 'separate'
-    extrachromosomal_strategy = 'bundled' 
-    
-    // Taxonomy routing dictionary
+    // Biology & Taxonomy
+    ploidy                   = 2             // Default nuclear ploidy
+    ploidy_map               = [ 'M': 1, 'P': 1 ] // Overrides for Mitochondria and Plasmids
+    repetitive_intervals     = 'data/repititive_intervals/sensustricto8.repetitive.intervals'
+
+    // Universal Sensu Stricto Routing Dictionary
     species_map = [
-        'c': 'cerevisiae', 'e': 'eubayanus', 'p': 'paradoxus',
-        'm': 'mikatae', 'k': 'kudriavzevii', 'u': 'uvarum',
-        'a': 'arboricola', 'j': 'jurei'
+        'c': 'cerevisiae', 'e': 'eubayanus',    'p': 'paradoxus',  'm': 'mikatae',
+        'k': 'kudriavzevii', 'u': 'uvarum',       'a': 'arboricola', 'j': 'jurei'
     ]
 }
 
 ```
 
----
+### Incremental GenomicsDB Updates
 
-##  Output Directory Layout
+To safely append newly sequenced strains to an existing `GenomicsDB` without rebuilding the entire dataset:
 
-```text
-results/
-├── pipeline_info/          # Execution reports, timelines, and DAGs
-├── strains/                # Strain lists and merged FASTQs
-├── filtration/             # Filtered FASTQs and multiQC-compatible JSON reports
-├── mapped/                 # Sorted BAMs, index files, and mapping summaries
-├── Haplotype_Calling/      # Per-strain GVCFs and manifests
-└── Joint_Genotyping/       
-    ├── c_I/                # Stateful GenomicsDB workspaces (can be updated!)
-    └── Final_Merged/       # Final, analysis-ready Master VCFs (e.g., cerevisiae_cohort.vcf.gz)
+```bash
+nextflow run main.nf \
+  --samplesheet new_strains.csv \
+  --genomicsdb_update_path "/path/to/historical/Joint_Genotyping" \
+  -profile singularity -resume
 
 ```
 
 ---
 
-## 📖 Module Documentation
+## Directory Structure
 
-For deep technical specifications, input/output contracts, and command flag rationales, check the module guides:
+```text
+saccharomyces-genomics-pipeline/
+├── bin/
+│   ├── run_ibs.R               # R interface for distance calculation
+│   └── ibs_engine.cpp          # OpenMP C++ distance matrix engine
+├── modules/
+│   ├── download_raw.nf         # Module 1 (aria2c / fasterq-dump)
+│   ├── filter_reads.nf         # Module 2 (fastp)
+│   ├── map_reads.nf            # Module 3 (bwa-mem / samtools markdup)
+│   ├── coverage.nf             # Module 4 (bedtools)
+│   ├── haplotype_calling.nf    # Module 5 (gatk HaplotypeCaller)
+│   ├── joint_genotyping.nf     # Module 6 (gatk GenomicsDB / GenotypeGVCFs)
+│   ├── variant_filtration.nf   # Module 7 (gatk VariantFiltration)
+│   └── phylogenomy.nf          # Module 8 (bcftools / awk / C++)
+├── data/
+│   ├── references/             
+│   ├── repititive_intervals/   
+│   └── slidingwindow/          
+├── docs/                       # Technical Specifications
+├── nextflow.config             
+└── main.nf                     
 
-* [`docs/MODULE_1_DATA_ACQUISITION.md`](https://www.google.com/search?q=docs/MODULE_1_DATA_ACQUISITION.md)
-* [`docs/MODULE_2_READ_FILTRATION.md`](https://www.google.com/search?q=docs/MODULE_2_READ_FILTRATION.md)
-* [`docs/MODULE_3_MAPPING.md`](https://www.google.com/search?q=docs/MODULE_3_MAPPING.md)
-* [`docs/MODULE_4_COVERAGE.md`](https://www.google.com/search?q=docs/MODULE_4_COVERAGE.md)
-* [`docs/MODULE_5_VARIANT_CALLING.md`](https://www.google.com/search?q=docs/MODULE_5_VARIANT_CALLING.md)
-* [`docs/MODULE_6_JOINT_GENOTYPING.md`](https://www.google.com/search?q=docs/MODULE_6_JOINT_GENOTYPING.md)
+```
 
 ---
 
-## 📜 License
+## Module Documentation
 
-Distributed under the MIT License. See `LICENSE` for more information.
+For in-depth technical specifications, process signatures, and I/O contracts, refer to the module-specific documentation:
+
+* 📥 [`MODULE_1: Data Acquisition & Validation`](https://www.google.com/search?q=docs/MODULE_1_DATA_ACQUISITION.md)
+* 🧹 [`MODULE_2: Read Filtration`](https://www.google.com/search?q=docs/MODULE_2_READ_FILTRATION.md)
+* 🗺️ [`MODULE_3: Mapping & Duplicate Marking`](https://www.google.com/search?q=docs/MODULE_3_MAP_READS.md)
+* 📊 [`MODULE_4: Coverage Profiling`](https://www.google.com/search?q=docs/MODULE_4_COVERAGE.md)
+* 🧬 [`MODULE_5: Haplotype Calling`](https://www.google.com/search?q=docs/MODULE_5_HAPLOTYPE_CALLING.md)
+* 🧩 [`MODULE_6: Joint Genotyping`](https://www.google.com/search?q=docs/MODULE_6_JOINT_GENOTYPING.md)
+* ✂️ [`MODULE_7: Variant Filtration`](https://www.google.com/search?q=docs/MODULE_7_VARIANT_FILTRATION.md)
+* 🌳 [`MODULE_8: Phylogenomics & Matrices`](https://www.google.com/search?q=docs/MODULE_8_PHYLOGENY.md)
 
 ---
+
+## Citation & Code Availability
+
+If this pipeline is utilized in your research, please cite the exact release version via Zenodo alongside the forthcoming manuscript:
+
+> Akbar, M. H., Pfliegler, V., et al. (2026). *[Manuscript Title in Prep]*. [Journal Name].
+> Code availability: **Saccharomyces Genomics Pipeline v2.1.8**. GitHub: `hanzala-14/saccharomyces-genomics-pipeline`. DOI: [10.5281/zenodo.XXXXXXX](https://www.google.com/search?q=https://doi.org/10.5281/zenodo.XXXXXXX)
+
+## License
+
+This software is released under the **MIT License**. See the [LICENSE](https://www.google.com/search?q=LICENSE) file for comprehensive details.
