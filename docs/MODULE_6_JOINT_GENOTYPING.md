@@ -1,144 +1,137 @@
 
 ---
 
-# 📖 Module 6: Joint Genotyping & Merging
+# 📖 Module 6: Joint Genotyping & GenomicsDB Construction
 
 * **Repository:** `hanzala-14/saccharomyces-genomics-pipeline`
 * **Module Source:** `modules/joint_genotyping.nf`
 * **Workflow Source:** `main.nf`
 * **Pipeline Configuration:** `nextflow.config`
 * **Pipeline Version:** `2.1.6`
-* **Last Updated:** `09 August 2026`
+* **Last Updated:** 11 October 2026
 
 ---
 
 ## 1) Purpose & Scope
 
-Module 6 is the capstone of the pipeline. It aggregates the individual Genomic VCFs (GVCFs) produced in Module 5 and performs **Joint Genotyping** across the entire population cohort. This multi-sample joint calling dramatically increases statistical power, allowing GATK to accurately call rare variants, filter out noise, and definitively distinguish homozygous reference sites from missing data.
+Module 6 orchestrates multi-sample Joint Genotyping, a cornerstone of the GATK Best Practices. By evaluating variant evidence across the entire cohort simultaneously, joint genotyping empowers the pipeline to distinguish true rare variants from sequencing artifacts and accurately assign `0/0` (homozygous reference) calls instead of "no-call" states.
 
-The final outputs of this module are fully merged, analysis-ready master VCFs tailored for downstream admixture, PCA, and maximum-likelihood phylogenomic tree construction.
+It handles:
+
+1. Dynamic aggregation of per-chromosome GVCFs into a highly scalable `GenomicsDB` data store.
+2. **Incremental Database Expansion:** The ability to append new samples to a historical database without re-importing the entire compendium from scratch.
+3. Chromosome-level joint variant calling (`GenotypeGVCFs`) to bypass single-node computational bottlenecks.
+4. Final consolidation of scattered chromosomal VCFs into a unified, publication-ready cohort VCF (`MergeVcfs`).
+5. Native circumvention of Nextflow directory-overwrite collisions via explicit local cache clearing.
 
 ---
 
 ## 2) Design Principles
 
-### 2.1 Atomic Updates & Compendium Data Protection
+### 2.1 Incremental Database Growth (The `update_path` Paradigm)
 
-Standard Nextflow processes are stateless, but GATK’s `GenomicsDB` is a highly complex, stateful data directory. To allow the pipeline to append new strains to a massive existing database (e.g., a 5,000-strain compendium on an external drive) without risking data loss, this module utilizes a strict **Source-Isolation Architecture**:
-* **Read-Only Source:** The script safely copies the existing database from the external source into an isolated Nextflow work directory. The source database is never modified directly.
-* **Isolated Update:** GATK updates this local, isolated copy with the new GVCFs.
-* **Safe Output Overwrite:** To prevent Nextflow `publishDir` conflicts, a pure-Bash `rm -rf` command clears out the *local output directory* (`results/Joint_Genotyping/`) just before publishing. It never executes against the source path, guaranteeing zero data corruption to the original compendium.
+In large-scale yeast genomics, new strains are constantly sequenced over months or years. Module 6 checks the `update_path` variable. If a historical GenomicsDB exists, the module creates a read-only copy of it in the local workspace and utilizes `--genomicsdb-update-workspace-path` to inject only the new samples. If no path is provided, it seamlessly defaults to a `FRESH` build using `--genomicsdb-workspace-path`.
 
-### 2.2 Universal *Sensu Stricto* Taxonomy Routing
+### 2.2 Nextflow Overwrite Safety Fix
 
-The pipeline completely eliminates hardcoded organism logic (e.g., `if (chrom == 'c_I')`). It relies on a `species_map` dictionary in `nextflow.config` to dynamically tokenize chromosome names at the underscore (`c_`, `e_`, `p_`, etc.) and automatically route them to the correct species cohort. It scales infinitely from simple 2-way *S. pastorianus* hybrids up to massive 8-species pan-genomic *Sensu Stricto* compendiums.
+`GenomicsDB` produces a complex directory structure rather than a single file. When Nextflow attempts to publish (`publishDir`) an updated database over an existing directory symlink, it frequently crashes. The `GENOMICSDB_IMPORT` script proactively executes `rm -rf "${target_publish_dir}"` on the local output destination just before completion, allowing Nextflow's `overwrite: true` directive to safely place the new database without corrupting the source compendium.
 
-### 2.3 Extrachromosomal Modularity
+### 2.3 Scatter-Gather Architecture
 
-Population geneticists often require strictly nuclear genomes to calculate accurate phylogenetic distances. By utilizing the `extrachromosomal_strategy` toggle, the pipeline can dynamically alter the output prefix before merging:
+GenomicsDB and GenotypeGVCFs are highly memory-intensive and do not multi-thread efficiently across an entire genome. By scattering the workload by chromosome (`chrom`), the pipeline can process the 16 yeast chromosomes concurrently across 16 different cluster nodes, reducing days of compute time down to hours.
 
-* **Bundled:** Mitochondria and plasmids are packaged directly into the main species VCF.
-* **Isolated:** The pipeline splits the biological components, outputting cleanly separated Nuclear, Mitochondrial, and Plasmid VCFs for each species.
+### 2.4 Safe JVM Memory Management
+
+GATK processes are wrapped with a dynamic memory calculation (`task.memory.toGiga() * 0.8`). This reserves 20% of the allocated container memory for native OS overhead, preventing silent container kills. Standard `errorStrategy` directives automatically catch and retry any residual `137` (OOM) or `143` (SIGTERM) exceptions.
 
 ---
 
-## 3) Input Contract
+## 3) End-to-End Workflow
 
-| Channel | Tuple Shape | Source |
-| --- | --- | --- |
-| `ch_for_genomicsdb` | `(chrom, list(gvcfs), list(tbis))` | `HAPLOTYPE_CALLER.out.gvcf` |
-| `gatk_ref` | `(fasta, fai, dict)` | `PREPARE_GATK_REF.out` |
-
----
-
-## 4) Process Specification
-
-### 4.1 `GENOMICSDB_IMPORT`
-
-**Role:** Builds or incrementally updates a multi-dimensional datastore for variant calling.
-
-* **Label:** `high`
-* **Concurrency:** Throttled to `maxForks = 2` to prevent memory bandwidth starvation.
-* **Dynamic Feature:** Reads `params.genomicsdb_update_path`. If null, builds a fresh DB. If provided, copies and incrementally updates the database with new GVCFs, saving days of compute time for large compendiums.
-
-### 4.2 `GENOTYPE_GVCFS`
-
-**Role:** Executes the joint calling algorithms across the cohort database to produce a raw VCF per chromosome.
-
-* **Label:** `high`
-* **Output:** `cohort.${chrom}.vcf.gz` (e.g., `cohort.c_I.vcf.gz`)
-
-### 4.3 `MERGE_VCFS`
-
-**Role:** A Picard-driven process that stitches the scattered per-chromosome VCFs into the final unified subgenome/species files.
-
-* **Label:** `medium`
-* **Dynamic Routing:** This process is biologically naive; it simply takes whatever `prefix` channel it is passed by `main.nf` (e.g., `cerevisiae`, `eubayanus_nuclear`) and outputs `<prefix>_cohort.vcf.gz`.
-
----
-
-## 5) Wiring in `main.nf`
-
-```groovy
-// =========================================================================
-// MODULE 6: JOINT GENOTYPING
-// =========================================================================
-
-// Group Module 5 output by chromosome
-ch_for_genomicsdb = HAPLOTYPE_CALLER.out.gvcf
-    .map { _strain_id, chrom, gvcf, tbi -> tuple(chrom, gvcf, tbi) }    
-    .groupTuple(by: 0)
-
-// 6A: Build or Update the Database
-GENOMICSDB_IMPORT(
-    ch_for_genomicsdb,
-    params.genomicsdb_update_path ?: ""
-)
-
-// 6B: Call the final variants using the Database from 6A
-GENOTYPE_GVCFS(
-    GENOMICSDB_IMPORT.out.db,
-    PREPARE_GATK_REF.out.gatk_ref.collect()
-)
-
-// 6C: Intelligent Subgenome Merging (Sensu Stricto Universal)
-if (params.merge_strategy == 'separate') {
-    ch_for_merge = GENOTYPE_GVCFS.out.cohort_vcf
-        .map { chrom, vcf, tbi -> 
-            // Split the chromosome name by the underscore
-            def parts = chrom.tokenize('_')
-            def prefix = parts[0]
-            def suffix = parts.size() > 1 ? parts[1] : ""
-            
-            // 1. Map the prefix to the species name
-            def species_name = params.species_map.get(prefix, "${prefix}_other")
-            def final_prefix = species_name // Default to bundled
-            
-            // 2. Apply the extrachromosomal isolation logic if requested
-            if (params.extrachromosomal_strategy == 'isolated') {
-                if (suffix.startsWith('M')) {
-                    final_prefix = "${species_name}_mitochondria"
-                } else if (suffix.startsWith('P')) {
-                    final_prefix = "${species_name}_plasmid"
-                } else {
-                    final_prefix = "${species_name}_nuclear"
-                }
-            }
-            
-            tuple(final_prefix, vcf, tbi)
-        }
-        .groupTuple(by: 0)
-} else {
-    // Group all chromosomes together under one name
-    ch_for_merge = GENOTYPE_GVCFS.out.cohort_vcf
-        .map { _chrom, vcf, tbi -> tuple('sensu_stricto_combined', vcf, tbi) }
-        .groupTuple(by: 0)
-}
-
-// Pass the intelligently grouped channel to Picard
-MERGE_VCFS(ch_for_merge)
+```mermaid
+flowchart TD
+    A["Per-Chromosome GVCFs<br/>(from Module 5)"] --> B["GENOMICSDB_IMPORT"]
+    
+    DB_IN[("Historical GenomicsDB<br/>(If update_path is set)")] -.->|Copied to workspace| B
+    
+    B --> C[("Updated GenomicsDB<br/>(genomicsdb_${chrom})")]
+    C --> D["GENOTYPE_GVCFS"]
+    
+    D --> E["cohort.${chrom}.vcf.gz"]
+    
+    E --> F["MERGE_VCFS"]
+    F --> G["Final Cohort VCF<br/>(${prefix}_cohort.vcf.gz)"]
 
 ```
+
+---
+
+## 4) Input Contract (Operational)
+
+### 4.1 Upstream Pipeline Channels
+
+* **GVCF Stream (from Mod 5):** `tuple val(chrom), path(gvcfs), path(tbis)`
+* **Reference Stream:** `tuple path(fasta), path(fai), path(dict)`
+* **External Configuration:** `val(update_path)` (Absolute path to historical DB directory, or `null` for a fresh run).
+
+---
+
+## 5) Process-by-Process Specification
+
+### 5.1 `GENOMICSDB_IMPORT`
+
+**Role:** Consolidate multiple GVCFs into a high-performance GenomicsDB workspace.
+
+* **Label:** `high`
+* **Publish Path:** `${params.outdir}/Joint_Genotyping/${chrom}` (`mode: 'symlink', overwrite: true`)
+* **Error Strategy:** Retry on OOM (`137, 143, 247`). Max retries: 2.
+* **Outputs:**
+* `tuple val(chrom), path("genomicsdb_${chrom}")` *(emit: db)*
+* `path("sample_map_${chrom}.txt")` *(emit: sample_map)*
+
+
+
+#### Execution Logic
+
+1. **Sample Map Generation:** Dynamically generates a standard GATK sample map (`strain_id \t absolute_path.gvcf`) from the input channel array.
+2. **Mode Selection:**
+* **INCREMENTAL:** Copies the historical DB from `update_path` and sets `IMPORT_FLAG="--genomicsdb-update-workspace-path"`.
+* **FRESH:** Sets `IMPORT_FLAG="--genomicsdb-workspace-path"`.
+
+
+3. **Execution:** Runs `gatk GenomicsDBImport` utilizing `params.batch_size` to control memory spikes when reading hundreds of files.
+4. **Collision Prevention:** Clears the specific local output directory path to ensure Nextflow's symlink publisher can overwrite the old database cleanly.
+
+### 5.2 `GENOTYPE_GVCFS`
+
+**Role:** Perform joint variant calling across all samples within the GenomicsDB.
+
+* **Label:** `high`
+* **Publish Path:** `${params.outdir}/Joint_Genotyping/${chrom}` (pattern: `cohort.*`)
+* **Error Strategy:** Retry on OOM (`137, 143, 247`). Max retries: 2.
+* **Input:** `tuple val(chrom), path(workspace)` and the GATK Reference bundle.
+* **Output:** `tuple val(chrom), path("cohort.${chrom}.vcf.gz"), path("cohort.${chrom}.vcf.gz.tbi")` *(emit: cohort_vcf)*
+
+#### Execution Logic
+
+* Mounts the input database directory using the URI syntax `-V "gendb://${workspace}"`.
+* Executes `gatk GenotypeGVCFs` to evaluate the cohort and emit a unified VCF containing genotype calls (`0/0`, `0/1`, `1/1`, `./.`) and variant annotations for the specific chromosome.
+* Checks that the output VCF is non-empty before reporting success.
+
+### 5.3 `MERGE_VCFS`
+
+**Role:** Recombine the scattered chromosomal VCFs into the final cohort deliverable.
+
+* **Label:** `medium`
+* **Publish Path:** `${params.outdir}/Joint_Genotyping/Final_Merged` (`mode: 'symlink', overwrite: true`)
+* **Input:** `tuple val(prefix), path(vcfs), path(tbis)`
+* **Output:** `tuple val(prefix), path("${prefix}_cohort.vcf.gz"), path("${prefix}_cohort.vcf.gz.tbi")` *(emit: final_vcf)*
+
+#### Execution Logic
+
+* Gathers all chromosomal VCFs generated by `GENOTYPE_GVCFS`.
+* Formats them into an argument string (`-I chrI.vcf.gz -I chrII.vcf.gz ...`).
+* Executes `gatk MergeVcfs` to generate the final, whole-genome cohort VCF ready for hard-filtering or VQSR.
 
 ---
 
@@ -149,28 +142,14 @@ In `nextflow.config`:
 ```groovy
 params {
     // --- Module 6: Joint Genotyping ---
-    batch_size             = 50   // Prevents GenomicsDBImport from consuming too much RAM at once
     
-    // Master Path for Incremental Compendium Updates
-    genomicsdb_update_path = null // Leave null for fresh build. Point to an existing DB parent path to update.
+    // Batch size controls memory usage during GVCF reading. 
+    // Lower to 50 or 0 (un-batched) if encountering severe OOM issues.
+    batch_size = 50 
     
-    // Merging strategy for joint-called VCFs
-    merge_strategy = 'separate'  // Options: 'separate' (subgenome) or 'together' (all chromosomes combined)
-    
-    // Extrachromosomal strategy (only applies if merge_strategy is 'separate')
-    extrachromosomal_strategy = 'bundled' // Options: 'bundled' (all in one) or 'isolated' (splits nuclear/mito/plasmid)
-
-    // Universal Sensu Stricto Dictionary
-    species_map = [
-        'c': 'cerevisiae',
-        'e': 'eubayanus',
-        'p': 'paradoxus',
-        'm': 'mikatae',
-        'k': 'kudriavzevii',
-        'u': 'uvarum',
-        'a': 'arboricola',
-        'j': 'jurei'
-    ]
+    // Absolute path to a historical GenomicsDB directory for incremental updates
+    // Set to null to perform a completely fresh database build.
+    update_path = null 
 }
 
 ```
@@ -179,20 +158,19 @@ params {
 
 ## 7) Output Layout
 
-The database directories are safely persisted to allow future incremental updates, while the final `Final_Merged` folder contains the deliverable datasets.
-
 ```text
 results/
 └── Joint_Genotyping/
-    ├── c_I/
-    │   ├── genomicsdb_c_I/          <-- Stateful GATK Database (can be incrementally updated)
-    │   ├── cohort.c_I.vcf.gz        <-- Raw per-chromosome joint VCF
-    │   └── sample_map_c_I.txt
-    ├── e_XVI/
+    ├── Final_Merged/
+    │   ├── saccharomyces_cohort.vcf.gz
+    │   └── saccharomyces_cohort.vcf.gz.tbi
+    ├── chr_I/
+    │   ├── genomicsdb_chr_I/            # The actual database structure
+    │   ├── cohort.chr_I.vcf.gz
+    │   └── cohort.chr_I.vcf.gz.tbi
+    ├── chr_II/
     │   └── ...
-    └── Final_Merged/
-        ├── cerevisiae_cohort.vcf.gz         <-- Final, analysis-ready Master VCF
-        └── eubayanus_cohort.vcf.gz          <-- Final, analysis-ready Master VCF
+    └── ...
 
 ```
 
@@ -200,15 +178,18 @@ results/
 
 ## 8) Tool Reference
 
-| Tool | Version | Purpose |
+| Tool | Version (Min Recommended) | Purpose |
 | --- | --- | --- |
-| GATK4 | 4.4.0.0 | GenomicsDBImport & GenotypeGVCFs |
-| Picard | 3.5.0 | MergeVcfs |
+| **GATK** | 4.2+ | `GenomicsDBImport`, `GenotypeGVCFs`, and `MergeVcfs`. |
+
+---
 
 ## 9) Change Management Rule
 
-Any logic change affecting bash collision-handling (`rm -rf` inside Nextflow blocks), the taxonomy dictionary, merging grouping logic, or GATK DB paths must update:
+Any logic change affecting the `update_path` incremental logic, directory overwrite safety checks, or batch sizing must update:
 
 1. `docs/MODULE_6_JOINT_GENOTYPING.md` (this file)
 2. `modules/joint_genotyping.nf`
-3. The Module 6 routing block of `main.nf`
+3. The Module 6 execution block in `main.nf`
+
+This guarantees implementation and documentation remain synchronized throughout pipeline development.

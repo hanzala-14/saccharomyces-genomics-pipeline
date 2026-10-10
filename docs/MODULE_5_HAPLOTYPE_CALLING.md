@@ -1,137 +1,129 @@
 
 ---
 
-# 📖 Module 5: Variant Calling (GATK HaplotypeCaller)
+# 📖 Module 5: GATK HaplotypeCaller — Per-Chromosome GVCF Calling
 
 * **Repository:** `hanzala-14/saccharomyces-genomics-pipeline`
-* **Module Source:** `modules/haplotype_calling.nf`
+* **Module Source:** `modules/haplotype_caller.nf` *(Assumed based on architecture)*
 * **Workflow Source:** `main.nf`
 * **Pipeline Configuration:** `nextflow.config`
 * **Pipeline Version:** `2.1.5`
-* **Last Updated:** `07 August 2026`
+* **Last Updated:** 11 October 2026
 
 ---
 
 ## 1) Purpose & Scope
 
-Module 5 transitions the pipeline from read alignment into genomic variant detection. Utilizing **GATK HaplotypeCaller**, this module generates per-strain Genomic VCFs (GVCFs). Running in GVCF mode (`-ERC GVCF`) is a mandatory prerequisite for downstream population-level joint genotyping (Module 6), as it preserves confidence scores for both variant and non-variant reference sites.
+Module 5 executes high-accuracy variant discovery on the duplicate-marked BAM files using GATK's `HaplotypeCaller`. To achieve high performance, variant calling is scattered across individual chromosomes and emitted as Genomic VCFs (GVCFs).
+
+It handles:
+
+1. Preparation of the reference genome for GATK (generating `.dict` and `.fai` indices).
+2. Highly parallelized, per-chromosome variant calling (`HaplotypeCaller`).
+3. Dynamic ploidy resolution per-chromosome (e.g., differentiating between haploid mitochondrial DNA and diploid autosomal DNA).
+4. Robust Java Virtual Machine (JVM) memory allocation and retry handling for Out-Of-Memory (OOM) exceptions.
+5. Gathering of per-chromosome GVCFs into a unified strain-level manifest (`gvcf_list.txt`) to seamlessly feed into Module 6 (GenomicsDBImport & Joint Genotyping).
 
 ---
 
 ## 2) Design Principles
 
-### 2.1 Scatter-Gather Architecture
+### 2.1 Scatter-Gather Parallelism
 
-To bypass the extreme computational bottleneck of whole-genome variant calling, this module employs a highly parallelized scatter-gather strategy:
+Instead of calling variants on the entire genome in a single monolithic task (which takes hours and bottlenecks the pipeline), the workload is scattered by chromosome (`-L ${chrom}`). This allows a single strain's variant calling to be processed concurrently across multiple CPU nodes, slashing total execution time.
 
-* **Scatter:** Each incoming strain BAM is mathematically combined with a dynamically generated list of target chromosomes, spawning independent jobs per chromosome.
-* **Gather:** Upon completion, a dedicated aggregation process collects the per-chromosome GVCFs and automatically generates a sample manifest (`gvcf_list.txt`) required for Module 6 `GenomicsDBImport`.
+### 2.2 Global Dynamic Ploidy Resolution
 
-### 2.2 Dynamic Reference Agnosticism
+*Saccharomyces cerevisiae* genomes contain both diploid (or polyploid) autosomes and haploid mitochondrial DNA. To prevent false heterozygous calls on the mitochondrion, the process dynamically reads `params.ploidy_map` from the global configuration. By tokenizing the chromosome name (e.g., extracting the suffix `M` from `chr_M`), it assigns the biologically correct ploidy on the fly, falling back to a default `params.ploidy` if no specific mapping exists.
 
-The target genomic intervals are fully decoupled from the pipeline code. Instead of relying on hardcoded lists in the configuration, the pipeline natively parses the FASTA Index (`.fai`) on the fly to auto-detect all contigs. The pipeline effortlessly scales from a standard 16-chromosome *Saccharomyces cerevisiae* run to a 130+ chromosome *Sensu Stricto* complex run without modifying a single line of Nextflow logic.
+### 2.3 Safe JVM Memory Management
 
-### 2.3 Biological Ploidy Calibration (Organelle Handling)
+GATK is notorious for Java heap space crashes. The `HAPLOTYPE_CALLER` process dynamically reads the Nextflow `task.memory` directive, subtracts 20% for overhead, and securely injects the remaining memory into the JVM arguments (`-Xmx${avail_mem}g`). If an OOM kill still occurs (exit codes `137, 143, 247`), the task is natively caught by the `errorStrategy` and retried with increased resources.
 
-Mitochondria (`_M`) and plasmids (`_P`) do not follow diploid Mendelian inheritance. Running GATK with a global `-ploidy 2` introduces mathematical errors for these haploid organelles.
+### 2.4 The GVCF Paradigm
 
-* **Master Switch:** An `include_extrachromosomal` toggle allows researchers to drop organelles from the pipeline entirely before variant calling.
-* **Dynamic Ploidy:** For organelles that pass through, a config-driven `ploidy_map` identifies chromosome suffixes and forces GATK into haploid calling mode (`-ploidy 1`), preserving statistical integrity while defaulting to diploid for nuclear chromosomes.
-
-### 2.4 Just-In-Time Reference Formatting
-
-Because Module 3 utilizes a pure-C `samtools` duplicate marking workflow (bypassing Picard to save memory), the required Picard Sequence Dictionary (`.dict`) is absent. Module 5 introduces a lightweight, just-in-time preparation step (`PREPARE_GATK_REF`) that leverages the existing `medium` Conda environment to generate the `.dict` and `.fai` files instantly before execution.
+Rather than emitting direct VCFs, `HaplotypeCaller` is executed in `-ERC GVCF` mode. This produces a Genomic VCF containing confidence scores for both variant and non-variant sites, which is strictly required for accurate multi-sample joint genotyping in downstream modules.
 
 ---
 
-## 3) Input Contract
+## 3) End-to-End Workflow
 
-### 3.1 Flow from Module 3 & Config
+```mermaid
+flowchart TD
+    A1["Reference FASTA"] --> B["PREPARE_GATK_REF<br/>(samtools faidx, gatk CreateSequenceDictionary)"]
+    B --> C["GATK Reference Bundle<br/>(fasta, fai, dict)"]
 
-| Channel | Tuple Shape | Source |
-| --- | --- | --- |
-| `hc_input` | `(strain_id, mdup.bam, mdup.bam.bai, chrom)` | `MARKDUP` × `chromosomes_ch` |
-| `gatk_fasta_ch` | `fasta` | Extracted from `indexed_reference` |
-| `ploidy_map` | `val(map)` | Passed directly from `nextflow.config` |
+    A2["Duplicate-Marked BAMs<br/>(from Mod 3)"] --> D["HAPLOTYPE_CALLER<br/>(-ERC GVCF, -L chrom)"]
+    A3["Chromosome List<br/>(Channel)"] --> D
+    C --> D
 
----
+    D --> E["Per-Chromosome GVCFs<br/>(e.g., strainA.chrI.g.vcf.gz)"]
 
-## 4) Process Specification
-
-### 4.1 `PREPARE_GATK_REF`
-
-**Role:** Generates the precise reference indices required by GATK.
-
-* **Label:** `medium` (Reuses the Picard/Samtools Conda environment from Module 3)
-* **Output:** `(fasta, fasta.fai, fasta.dict)`
-
-### 4.2 `HAPLOTYPE_CALLER`
-
-**Role:** Executes GATK HaplotypeCaller on a single strain-chromosome pair.
-
-* **Label:** `calling`
-* **Container:** `biocontainers/gatk4:4.4.0.0`
-* **Dynamic Logic:** Parses the chromosome suffix (e.g., `_M`) and looks it up in `ploidy_map` to assign `-ploidy 1` or `-ploidy 2`.
-* **Memory Allocation:** Dynamically parses `${task.memory.toGiga()}` to allocate 80% of cluster-provided RAM to the Java Heap (`-Xmx`), preventing container OOM kills.
-* **Output:** A block-gzipped `.g.vcf.gz` and its `.tbi` index per chromosome.
-
-### 4.3 `GATHER_STRAIN_GVCFS`
-
-**Role:** Collects all scattered GVCFs for a given strain and authors the downstream manifest.
-
-* **Label:** `tiny`
-* **Output:** Aggregated GVCFs/TBIs and `${strain_id}.gvcf_list.txt`.
-* **Value Add:** Completely automates sample map creation, eliminating manual text-wrangling before Joint Genotyping.
-
----
-
-## 5) Wiring in `main.nf`
-
-```groovy
-include { 
-    PREPARE_GATK_REF
-    HAPLOTYPE_CALLER
-    GATHER_STRAIN_GVCFS 
-} from './modules/haplotype_calling.nf'
-
-// =========================================================================
-// MODULE 5: GATK HaplotypeCaller — Per-chromosome GVCF Calling
-// =========================================================================
-
-// Extract just the FASTA from Module 3's reference channel
-gatk_fasta_ch = indexed_reference.map { fasta, _idx -> fasta }
-
-// Prepare the exact .fai and .dict bundle GATK needs
-PREPARE_GATK_REF(gatk_fasta_ch)
-
-// Dynamically extract all chromosome names directly from the FASTA index (.fai)
-// and filter based on the extrachromosomal master switch
-chromosomes_ch = PREPARE_GATK_REF.out.gatk_ref
-    .map { _fasta, fai, _dict -> fai }
-    .splitCsv(sep: '\t')
-    .map { row -> row[0] }
-    .filter { chrom -> 
-        if (!params.include_extrachromosomal) {
-            // Drop any chromosome ending in _M or _P if the switch is false
-            return !(chrom.endsWith('_M') || chrom.endsWith('_P'))
-        }
-        return true
-    }
-
-// Scatter: 1 BAM × N Chromosomes 
-hc_input = MARKDUP.out.markdup_bam.combine(chromosomes_ch)
-
-// Execute variant calling utilizing the NEW GATK reference bundle and dynamic ploidy map
-HAPLOTYPE_CALLER(
-    hc_input, 
-    PREPARE_GATK_REF.out.gatk_ref.collect(),
-    params.ploidy_map
-)
-
-// Gather: Group outputs by strain_id and generate manifest
-GATHER_STRAIN_GVCFS(HAPLOTYPE_CALLER.out.gvcf.groupTuple(by: 0))
+    E --> F["GATHER_STRAIN_GVCFS<br/>(Consolidation)"]
+    
+    F --> G["strain.gvcf_list.txt<br/>(Manifest for Joint Genotyping)"]
 
 ```
+
+---
+
+## 4) Input Contract
+
+### 4.1 Upstream Pipeline Channels
+
+* **Reference Stream:** `path fasta`
+* **Mapping Stream:** `tuple val(strain_id), path(bam), path(bai), val(chrom)`
+* **Dynamic Params (Config):** `params.ploidy_map` and `params.ploidy`
+
+---
+
+## 5) Process Specification
+
+### 5.1 `PREPARE_GATK_REF`
+
+**Role:** Generate standard sequence dictionary and FASTA index required by GATK tools.
+
+* **Label:** `medium`
+* **Input:** `path fasta`
+* **Output:** `tuple path(fasta), path("*.fai"), path("*.dict")` *(emit: gatk_ref)*
+* **Execution Logic:**
+* Executes `samtools faidx` to create the `.fai` file.
+* Executes `gatk CreateSequenceDictionary` to generate the `.dict` file.
+
+
+
+### 5.2 `HAPLOTYPE_CALLER`
+
+**Role:** Discover variants and emit GVCFs for a specific chromosome of a specific strain.
+
+* **Label:** `calling`
+* **Error Strategy:** `retry` on `137` (OOM), `143` (SIGTERM), and `247`. Max retries: 2.
+* **Input:** `tuple val(strain_id), path(bam), path(bai), val(chrom)` + `gatk_ref` tuple.
+* **Output:** `tuple val(strain_id), val(chrom), path("${strain_id}.${chrom}.g.vcf.gz"), path("${strain_id}.${chrom}.g.vcf.gz.tbi")` *(emit: gvcf)*
+
+#### Execution Logic
+
+1. **Memory Calculation:** Extracts `task.memory.toGiga() * 0.8` to safely allocate `-Xmx` to Java.
+2. **Ploidy Lookup:** Tokenizes `chrom` by underscore (`_`). Looks up the suffix in `params.ploidy_map`. If not found, defaults to `params.ploidy`.
+3. **Execution:** Runs `gatk HaplotypeCaller` constrained to the specific chromosome (`-L ${chrom}`) and specific ploidy.
+4. **Validation:** Checks if the GVCF was successfully produced; exits with `1` if empty.
+
+### 5.3 `GATHER_STRAIN_GVCFS`
+
+**Role:** Consolidate the scattered chromosome GVCFs back to the strain level and generate a manifest.
+
+* **Label:** `tiny`
+* **Publish Path:** `${params.outdir}/Haplotype_Calling/${strain_id}` (`mode: 'symlink'`)
+* **Input:** `tuple val(strain_id), val(chroms), path(gvcfs), path(tbis)`
+* **Outputs:**
+* `tuple val(strain_id), path(gvcfs), path(tbis)` *(emit: strain_gvcfs)*
+* `tuple val(strain_id), path("${strain_id}.gvcf_list.txt")` *(emit: gvcf_list)*
+
+
+
+#### Execution Logic
+
+* Takes an array of all per-chromosome GVCFs for a given strain, sorts them alphabetically, and writes their filenames into a flat text manifest (`${strain_id}.gvcf_list.txt`). This manifest acts as a direct input map for GenomicsDBImport in Module 6.
 
 ---
 
@@ -143,28 +135,14 @@ In `nextflow.config`:
 params {
     // --- Module 5: Haplotype Calling ---
     
-    // Master switch to include/exclude mitochondria and plasmids
-    include_extrachromosomal = true 
+    // Default ploidy for standard yeast autosomes (Diploid)
+    ploidy = 2 
     
-    ploidy = 2 // Default nuclear ploidy
-    
-    // Ploidy map: Suffix (M, P) -> Ploidy (1). 
-    // Anything not in this list defaults to params.ploidy (2).
+    // Dynamic mapping for non-standard chromosomes (e.g., mitochondrial DNA is haploid)
     ploidy_map = [
-        'M': 1,
-        'P': 1
+        'M': 1, 
+        'MT': 1
     ]
-}
-
-process {
-    withLabel: 'calling' {
-        cpus   = 2
-        memory = 6.GB
-        time   = 4.h
-    }
-    withName: 'HAPLOTYPE_CALLER' {
-        maxForks = 2 // Safely throttles concurrency for local development
-    }
 }
 
 ```
@@ -176,14 +154,14 @@ process {
 ```text
 results/
 └── Haplotype_Calling/
-    ├── StrainA/
-    │   ├── StrainA.c_I.g.vcf.gz
-    │   ├── StrainA.c_I.g.vcf.gz.tbi
+    ├── <strain_A>/
+    │   ├── strain_A.chr_I.g.vcf.gz
+    │   ├── strain_A.chr_I.g.vcf.gz.tbi
+    │   ├── strain_A.chr_II.g.vcf.gz
+    │   ├── strain_A.chr_II.g.vcf.gz.tbi
     │   ├── ...
-    │   ├── StrainA.c_M.g.vcf.gz        <-- Retained and haploid-called if enabled
-    │   ├── StrainA.e_XVI.g.vcf.gz
-    │   └── StrainA.gvcf_list.txt       <-- Auto-generated manifest
-    └── StrainB/
+    │   └── strain_A.gvcf_list.txt     # Manifest for Mod 6
+    └── <strain_B>/
         └── ...
 
 ```
@@ -192,16 +170,19 @@ results/
 
 ## 8) Tool Reference
 
-| Tool | Version | Purpose |
+| Tool | Version (Min Recommended) | Purpose |
 | --- | --- | --- |
-| Picard | 3.5.0 | Sequence Dictionary Generation |
-| GATK4 | 4.4.0.0 | HaplotypeCaller (GVCF mode) |
+| **GATK** | 4.2+ | FASTA dictionary generation and HaplotypeCaller GVCF variant discovery. |
+| **Samtools** | 1.10+ | Fast indexing of the reference sequence (`faidx`). |
+
+---
 
 ## 9) Change Management Rule
 
-Any logic change affecting Java memory tuning, dynamic ploidy maps, `.fai` extraction filtering, or GATK container versions must update:
+Any logic change affecting JVM memory handling, dynamic ploidy lookup mechanisms, or the GVCF manifest format must update:
 
-1. `docs/MODULE_5_VARIANT_CALLING.md` (this file)
-2. `modules/haplotype_calling.nf`
-3. The Module 5 section of `main.nf`
-4. The parameters block of `nextflow.config`
+1. `docs/MODULE_5_HAPLOTYPE_CALLING.md` (this file)
+2. `modules/haplotype_caller.nf`
+3. The Module 5 execution block in `main.nf`
+
+This guarantees implementation and documentation remain synchronized throughout pipeline development.

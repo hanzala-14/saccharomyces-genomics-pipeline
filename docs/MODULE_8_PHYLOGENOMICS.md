@@ -1,95 +1,198 @@
 
 ---
 
-# 📖 Module 8: Phylogenomics (IBSx & Tree Construction)
+# 📖 Module 8: IBSx Phylogeny & Distance Matrices
 
 * **Repository:** `hanzala-14/saccharomyces-genomics-pipeline`
-* **Module Source:** `modules/phylogenomy.nf`
-* **Custom Scripts:** `bin/run_ibs.R`, `bin/build_tree.R`, `bin/ibs.cpp`
+* **Module Source:** `modules/phylogeny.nf`
 * **Workflow Source:** `main.nf`
 * **Pipeline Configuration:** `nextflow.config`
 * **Pipeline Version:** `2.1.8`
-* **Last Updated:** `14 August 2026`
+* **Last Updated:** 11 October 2026
 
 ---
 
 ## 1) Purpose & Scope
 
-Module 8 is the analytical terminus of the pipeline, transforming pristine, hard-filtered VCFs into evolutionary insights. It is engineered specifically to unravel the complex reticulate evolutionary history of the *Saccharomyces Sensu Stricto* complex.
+Module 8 performs the critical transformation of raw genotypic data into mathematical distance matrices representing evolutionary relatedness. It bridges the gap between variant calling (VCFs) and downstream phylogenetic network reconstruction (e.g., SplitsTree or neighbor-joining trees).
 
-Because yeast species frequently undergo hybridization, introgression, and incomplete lineage sorting (ILS), genome-wide consensus trees are often biologically misleading. To counteract this, Module 8 executes a three-stage chromosomal phylogenomics workflow: (1) Vectorized haploid-equivalent allele splitting, (2) High-performance Identity-by-State (IBS) matrix calculation via an OpenMP C++ backend, and (3) Automated tree inference, splits-graph generation, and Robinson-Foulds topological cross-comparisons.
+It is divided into two distinct, high-performance processes:
 
----
-
-## 2) Algorithmic & Mathematical Architecture
-
-### 2.1 Genotype Normalization & Allele Splitting (`PREP_ALLELES` / `awk`)
-
-Network algorithms (like NeighborNet) cannot natively process unphased diploid representations (e.g., `0/1`). The module utilizes a highly optimized `awk` vectorization engine to normalize all VCF genotypes and mathematically split them into distinct `Allele 1` and `Allele 2` haploid-equivalent arrays.
-
-* **Invariant Site Purging:** To reduce matrix bloat and computational overhead, monomorphic sites (where all samples share the reference allele) are actively evaluated and purged from the data stream.
-* **Missing Data Handling:** Genotypes lacking sufficient depth or quality (e.g., `./.`) are explicitly converted to a null state (`..`) to ensure downstream denominator penalties are strictly avoided during IBS calculations.
-
-### 2.2 High-Performance IBS Computation (`ibs.cpp` & `run_ibs.R`)
-
-Calculating pairwise genetic distance across millions of variable sites requires significant computational scaling. `run_ibs.R` acts as an orchestrator, passing the haploid matrices into a custom, multithreaded C++ engine.
-
-* **The Distance Metric:** The engine calculates the pairwise IBS distance $D_{ij}$ between any two yeast strains $i$ and $j$ based on the proportion of shared alleles:
-
-$$D_{ij} = 1 - \frac{\text{Shared Alleles}_{ij}}{\text{Valid Alleles}_{ij}}$$
-
-
-* **Dynamic Missingness Correction:** If a locus is missing in either strain $i$ or $j$, the C++ engine dynamically decrements the $\text{Valid Alleles}$ denominator. This prevents regions of low sequencing coverage from artificially inflating evolutionary distance.
-* **Chunked OpenMP Threading:** To prevent out-of-memory (OOM) cluster crashes, the C++ engine chunks the genomic arrays (defined by `ibs_block_rows = 5000`) and processes the $N \times N$ matrix populating loops via OpenMP parallelization, strictly adhering to Nextflow's CPU allocations.
+1. **`PREP_ALLELES`:** Rapidly slices the master cohort VCF and vectorizes standard string genotypes (`0/0`, `0/1`, `1/1`) into split numerical Allele 1 and Allele 2 TSV matrices.
+2. **`RUN_IBS`:** Ingests the vectorized allele tables and executes a custom, multi-threaded R/C++ engine to calculate Identity-By-State (IBS) distance matrices.
 
 ---
 
-## 3) Process Specification & Data Flow
+## 2) Design Principles
 
-### Stage 1: `PREP_ALLELES`
+### 2.1 Dynamic VCF Slicing (The `ibs_strategy`)
 
-* **Input:** Hard-filtered `${cohort_name}.final.vcf.gz`
-* **Execution:** Dynamically queries the VCF header/data to extract all contigs, slicing the genome into independent chromosomal VCFs. Applies the AWK genotype splitter. Physically destroys resulting slices that possess 0 informative variants to shield the downstream C++ engine from null-pointer crashes.
-* **Output:** Clean `.allele1.tsv` and `.allele2.tsv` matrices; `.meta.json` checksums tracking exact sample and variant counts for data provenance.
+Phylogenetic signals often vary across chromosomes (especially in yeast, where hybridization and introgression can affect specific linkage groups differently).
 
-### Stage 2: `RUN_IBS`
+* **Chromosomal Mode:** `PREP_ALLELES` dynamically parses the VCF header, extracts all contigs, and slices the master VCF into individual chromosomes natively via `bcftools view`. This allows downstream network building to occur on a per-chromosome basis.
+* **Combined Mode:** Passes the entire genome through as a single block.
 
-* **Input:** Haploid matrices from Stage 1.
-* **Execution:** Compiles and triggers `ibs.cpp`. Matrix block size and OpenMP thread count are explicitly passed via CLI arguments to guarantee stable cluster scaling.
-* **Output:** `FINAL_combined_distance_matrix.tsv` + 16 chromosomal distance matrices.
+### 2.2 Vectorized AWK Genotype Splitting
+
+Standard VCF genotypes are not mathematically computable. `PREP_ALLELES` uses a highly optimized, vectorized `awk` script to split genotypes into independent `allele1` and `allele2` matrices.
+
+* Normalizes phase states (`|` to `/`).
+* Resolves missing data (`.` or `./.` to `..`).
+* Sorts heterozygous calls deterministically so `0/1` and `1/0` are treated identically.
+
+### 2.3 The "Downstream Shield"
+
+Chromosomes with zero informative variants (e.g., highly conserved regions or completely filtered contigs) will cause the downstream C++ matrix engine to crash with a segmentation fault. `PREP_ALLELES` counts the informative sites post-extraction; if the count is `0`, it actively deletes the sub-directory and skips execution, shielding the R engine from fatal errors.
+
+### 2.4 Bypassing Docker Symlink Walls (`stageInMode`)
+
+Nextflow conventionally creates symlinks to script files in the work directory. However, when invoking custom C++ headers via R within a Docker container, relative symlinks outside the container mount path cause catastrophic "File Not Found" compilation errors. `RUN_IBS` forces `stageInMode 'copy'` to physically copy the source code into the execution directory, bypassing the Docker symlink wall.
+
+### 2.5 OpenMP Core Hijacking Prevention
+
+C++ matrix operations using OpenMP will natively attempt to consume every available CPU core on the HPC node, violating Nextflow's resource scheduler. The module explicitly exports `OMP_NUM_THREADS=${task.cpus}` to constrain the R/C++ engine to the exact core count allocated by Nextflow.
 
 ---
 
-## 4) Configuration Contract (`nextflow.config`)
+## 3) End-to-End Workflow
 
-The mathematical depth and structural behavior of the module are entirely controlled via the config file:
-
-```groovy
-    // IBS Compute Backend Limits
-    ibs_block_rows       = 8192          // C++ chunk size for memory bounding
-    ibs_report_blocks    = 5             // OpenMP logging frequency
+```mermaid
+flowchart TD
+    A["Master Cohort VCF"] --> B{"params.ibs_strategy"}
+    
+    B -->|chromosomal| C1["bcftools view (Slice by Contig)"]
+    B -->|combined| C2["Pass Full Genome"]
+    
+    C1 --> D["bcftools query | awk<br/>(Vectorize Genotypes)"]
+    C2 --> D
+    
+    D --> E{"Informative Sites > 0?"}
+    E -->|No| F["Delete Slice<br/>(Downstream Shield)"]
+    E -->|Yes| G["Emit Allele 1 & Allele 2 TSVs"]
+    
+    G --> H["RUN_IBS<br/>(R/C++ OpenMP Engine)"]
+    H --> I["IBS Distance Matrices"]
 
 ```
 
 ---
 
-## 5) Dependency Reference
+## 4) Input Contract (Operational)
 
-| Tool | Version / Origin | Scientific Purpose |
+### 4.1 `PREP_ALLELES` Inputs
+
+* **Mapping Stream:** `tuple val(strain_id), path(master_vcf), path(master_tbi)`
+* **Dynamic Params (Config):** `params.ibs_strategy` and `params.filter_monomorphic`
+
+### 4.2 `RUN_IBS` Inputs
+
+* **Data Stream:** `tuple val(strain_id), path(samples), path(allele1), path(allele2)`
+* **Script Stream:** `path custom_scripts` (A directory channel containing `run_ibs.R` and associated `.cpp` source files).
+
+---
+
+## 5) Process-by-Process Specification
+
+### 5.1 `PREP_ALLELES`
+
+**Role:** Slice VCFs and convert them into mathematical allele arrays.
+
+* **Label:** `low`
+* **Publish Path:** `${params.outdir}/Phylogeny/Allele_Tables/${strain_id}` (only if `params.keep_allele_tables = true`)
+* **Outputs:**
+* `tuple val(strain_id), path("tables/*/*.samples.txt"), path("tables/*/*.allele1.tsv"), path("tables/*/*.allele2.tsv")` *(emit: allele_tables)*
+* `path "tables/*/*.meta.json"` *(emit: metadata)*
+
+
+
+#### Execution Logic
+
+1. **Slicing:** Determines strategy (`chromosomal` vs `combined`). If chromosomal, dynamically extracts contig IDs and runs a `bcftools view -r` loop.
+2. **Extraction:** Executes `bcftools query` piped into an `awk` processor.
+3. **Filtering:** If `params.filter_monomorphic` is true, rows where all samples share the exact same allele as the reference are dropped.
+4. **Metadata Checksums:** Generates a `.meta.json` file for every slice tracking the sample count, extracted site count, and MD5 checksum of the array.
+
+### 5.2 `RUN_IBS`
+
+**Role:** Calculate high-speed genetic distance matrices using a custom R/C++ engine.
+
+* **Label:** `phylogeny`
+* **Publish Path:** `${params.outdir}/Phylogeny/Distance_Matrices/${strain_id}` (`pattern: 'ibs_outputs/*'`)
+* **Outputs:** `tuple val(strain_id), path("ibs_outputs/*")` *(emit: distance_matrices)*
+
+#### Execution Logic
+
+1. **Physical Staging:** Enforces `stageInMode 'copy'` to ensure C++ headers compile successfully inside containers.
+2. **Execution:** Invokes `Rscript run_ibs.R` with dynamic block sizing (`params.ibs_block_rows`) to manage RAM overhead.
+3. **Validation:** Checks if `ibs_outputs/` is empty or contains zero-byte matrices. A failure triggers a fatal exit.
+4. **Provenance:** Generates a `versions.yml` logging the specific R-base version used for the compilation.
+
+---
+
+## 6) Configuration
+
+In `nextflow.config`:
+
+```groovy
+params {
+    // --- Module 8: Phylogeny & IBS ---
+    
+    // Execution Mode: 'chromosomal' (slice by contig) or 'combined' (whole genome)
+    ibs_strategy = 'chromosomal'
+    
+    // Drop sites where all samples match the reference?
+    filter_monomorphic = true
+    
+    // Debugging: Save the massive intermediate TSV arrays?
+    keep_allele_tables = false
+    
+    // R/C++ Engine Tuning
+    ibs_block_rows = 10000     // Number of variants processed per RAM block
+    ibs_report_blocks = 5      // Print progress every X blocks
+}
+
+```
+
+---
+
+## 7) Output Layout
+
+```text
+results/
+└── Phylogeny/
+    ├── Distance_Matrices/
+    │   ├── <strain_cohort>/
+    │   │   ├── <strain_cohort>_chr_I_ibs_matrix.tsv
+    │   │   ├── <strain_cohort>_chr_II_ibs_matrix.tsv
+    │   │   └── ...
+    │   └── ...
+    └── Allele_Tables/              # Only if keep_allele_tables = true
+        └── <strain_cohort>/
+            ├── chr_I.meta.json
+            ├── chr_I.samples.txt
+            ├── chr_I.allele1.tsv
+            └── chr_I.allele2.tsv
+
+```
+
+---
+
+## 8) Tool Reference
+
+| Tool | Version (Min Recommended) | Purpose |
 | --- | --- | --- |
-| `bcftools` | 1.19 | Contig extraction and variant isolation |
-| `awk` | Native Linux | Vectorized genotype string manipulation |
-| `ibs.cpp` | Custom Binary | High-speed, OpenMP-accelerated IBS distance math |
-| `ape` | R Package | NJ algorithms, bootstrapping, and midpoint rooting |
-| `phangorn` | R Package | NeighborNet algorithms and Robinson-Foulds metrics |
+| **Bcftools** | 1.10+ | Lightning-fast VCF slicing (`view`) and genotype extraction (`query`). |
+| **AWK** | N/A | Vectorized genotype string normalization and splitting. |
+| **R (with Rcpp/OpenMP)** | 4.0+ | Compilation and execution of the custom high-speed IBS distance engine. |
 
+---
 
-## 8) Change Management Rule
+## 9) Change Management Rule
 
-Any logic change affecting the `awk` string splitting, the OpenMP thread allocation, or the `saveAs` interceptor routing must update:
+Any logic change affecting the `awk` genotype normalization logic, the R/C++ execution signature, or Nextflow staging mechanisms must update:
 
 1. `docs/MODULE_8_PHYLOGENOMICS.md` (this file)
 2. `modules/phylogenomy.nf`
-3. The R/C++ binaries located in `bin/`
+3. `bin/run_ibs.R` and associated `.cpp` scripts
 
----
+This guarantees implementation and documentation remain synchronized throughout pipeline development.
