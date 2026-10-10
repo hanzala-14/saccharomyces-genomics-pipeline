@@ -4,6 +4,7 @@
 #  Saccharomyces Genomics Pipeline
 
 **A highly optimized Nextflow DSL2 workflow for population-scale WGS variant calling and phylogenomics of the *Saccharomyces sensu stricto* complex.**
+
 [![Nextflow](https://img.shields.io/badge/Nextflow_DSL2-≥23.10.0-23aa62?style=flat&logo=nextflow&logoColor=white)](https://www.nextflow.io/)
 [![GATK](https://img.shields.io/badge/GATK-4.4+-8A2BE2?style=flat)](https://gatk.broadinstitute.org/)
 [![Samtools](https://img.shields.io/badge/Samtools-1.16+-4CAF50?style=flat)](http://www.htslib.org/)
