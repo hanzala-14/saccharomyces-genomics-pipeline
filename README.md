@@ -1,6 +1,5 @@
 
 ---
-<div align="center">
 
 #  Saccharomyces Genomics Pipeline
 
