@@ -4,6 +4,14 @@
 #  Saccharomyces Genomics Pipeline
 
 **A highly optimized Nextflow DSL2 workflow for population-scale WGS variant calling and phylogenomics of the *Saccharomyces sensu stricto* complex.**
+[![Nextflow](https://img.shields.io/badge/Nextflow_DSL2-≥23.10.0-23aa62?style=flat&logo=nextflow&logoColor=white)](https://www.nextflow.io/)
+[![GATK](https://img.shields.io/badge/GATK-4.4+-8A2BE2?style=flat)](https://gatk.broadinstitute.org/)
+[![Samtools](https://img.shields.io/badge/Samtools-1.16+-4CAF50?style=flat)](http://www.htslib.org/)
+[![C++](https://img.shields.io/badge/C++-OpenMP-00599C?style=flat&logo=c%2B%2B&logoColor=white)](https://isocpp.org/)
+[![R](https://img.shields.io/badge/R-4.3+-276DC3?style=flat&logo=r&logoColor=white)](https://www.r-project.org/)
+[![Docker](https://img.shields.io/badge/Container-Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://docker.com)
+[![DOI](https://img.shields.io/badge/DOI-10.5281/zenodo.23289452-005EC6?style=flat)](https://doi.org/10.5281/zenodo.23289452)
+[![License](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
 
  [Pipeline Architecture](#pipeline-architecture) · [Quick Start](#quick-start) · [Configuration](#system-configuration) · [Module Documentation](#module-documentation)
 
@@ -183,8 +191,11 @@ For in-depth technical specifications, process signatures, and I/O contracts, re
 
 If this pipeline is utilized in your research, please cite the exact release version via Zenodo alongside the forthcoming manuscript:
 
-> Akbar, M. H., Pfliegler, V., et al. (2026). *[Manuscript Title in Prep]*. [Journal Name].
-> Code availability: **Saccharomyces Genomics Pipeline v2.1.8**. GitHub: `hanzala-14/saccharomyces-genomics-pipeline`. DOI: [10.5281/zenodo.XXXXXXX](https://www.google.com/search?q=https://doi.org/10.5281/zenodo.XXXXXXX)
+## Citation & Code Availability
+
+If this pipeline is utilized in your research, please cite the exact release version via Zenodo alongside the forthcoming manuscript:
+  
+> Code availability: **Saccharomyces Genomics Pipeline v2.1.8**. GitHub: `hanzala-14/saccharomyces-genomics-pipeline`. DOI: [10.5281/zenodo.23289452](https://doi.org/10.5281/zenodo.23289452)
 
 ## License
 
