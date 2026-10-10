@@ -1,5 +1,6 @@
 
 ---
+<div align="center">
 
 #  Saccharomyces Genomics Pipeline
 
@@ -189,7 +190,3 @@ If this pipeline is utilized in your research, please cite the exact release ver
 ## License
 
 This software is released under the **MIT License**. See the [LICENSE](https://www.google.com/search?q=LICENSE) file for comprehensive details.
-
-**Developed at the University of Debrecen**
-
-Yeast Genomics Lab
