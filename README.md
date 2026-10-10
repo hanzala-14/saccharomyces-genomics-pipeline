@@ -1,6 +1,5 @@
 
 ---
-<div align="center">
 
 ```
  ███████╗ ██████╗██████╗ 
@@ -15,7 +14,7 @@
 
 **A highly optimized Nextflow DSL2 workflow for population-scale WGS variant calling and phylogenomics of the *Saccharomyces sensu stricto* complex.**
 
-[Overview](https://www.google.com/search?q=%23overview) · [Pipeline Architecture](https://www.google.com/search?q=%23pipeline-architecture) · [Quick Start](https://www.google.com/search?q=%23quick-start) · [Configuration](https://www.google.com/search?q=%23configuration) · [Module Documentation](https://www.google.com/search?q=%23module-documentation)
+[Overview](#quick-start) · [Pipeline Architecture](#pipeline-architecture) · [Quick Start](#quick-start) · [Configuration](#system-configuration) · [Module Documentation](#module-documentation)
 
 ---
 
