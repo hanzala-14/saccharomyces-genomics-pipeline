@@ -1,20 +1,11 @@
 
 ---
 
-```
- ███████╗ ██████╗██████╗ 
- ██╔════╝██╔════╝██╔══██╗
- ███████╗██║     ██████╔╝
- ╚════██║██║     ██╔═══╝ 
- ███████║╚██████╗██║     
- ╚══════╝ ╚═════╝╚═╝     
- SACCHAROMYCES GENOMICS PIPELINE
-
-```
+#  Saccharomyces Genomics Pipeline
 
 **A highly optimized Nextflow DSL2 workflow for population-scale WGS variant calling and phylogenomics of the *Saccharomyces sensu stricto* complex.**
 
-[Overview](#quick-start) · [Pipeline Architecture](#pipeline-architecture) · [Quick Start](#quick-start) · [Configuration](#system-configuration) · [Module Documentation](#module-documentation)
+ [Pipeline Architecture](#pipeline-architecture) · [Quick Start](#quick-start) · [Configuration](#system-configuration) · [Module Documentation](#module-documentation)
 
 ---
 
