@@ -177,14 +177,14 @@ saccharomyces-genomics-pipeline/
 
 For in-depth technical specifications, process signatures, and I/O contracts, refer to the module-specific documentation:
 
-* 📥 [`MODULE_1: Data Acquisition & Validation`](https://www.google.com/search?q=docs/MODULE_1_DATA_ACQUISITION.md)
-* 🧹 [`MODULE_2: Read Filtration`](https://www.google.com/search?q=docs/MODULE_2_READ_FILTRATION.md)
-* 🗺️ [`MODULE_3: Mapping & Duplicate Marking`](https://www.google.com/search?q=docs/MODULE_3_MAP_READS.md)
-* 📊 [`MODULE_4: Coverage Profiling`](https://www.google.com/search?q=docs/MODULE_4_COVERAGE.md)
-* 🧬 [`MODULE_5: Haplotype Calling`](https://www.google.com/search?q=docs/MODULE_5_HAPLOTYPE_CALLING.md)
-* 🧩 [`MODULE_6: Joint Genotyping`](https://www.google.com/search?q=docs/MODULE_6_JOINT_GENOTYPING.md)
-* ✂️ [`MODULE_7: Variant Filtration`](https://www.google.com/search?q=docs/MODULE_7_VARIANT_FILTRATION.md)
-* 🌳 [`MODULE_8: Phylogenomics & Matrices`](https://www.google.com/search?q=docs/MODULE_8_PHYLOGENY.md)
+* 📥 [`MODULE_1: Data Acquisition & Validation`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_1_DATA_ACQUISITION.md)
+* 🧹 [`MODULE_2: Read Filtration`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_2_FILTRATION.md)
+* 🗺️ [`MODULE_3: Mapping & Duplicate Marking`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_3_MAP_READS.md)
+* 📊 [`MODULE_4: Coverage Profiling`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_4_COVERAGE.md)
+* 🧬 [`MODULE_5: Haplotype Calling`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_5_HAPLOTYPE_CALLING.md)
+* 🧩 [`MODULE_6: Joint Genotyping`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_6_JOINT_GENOTYPING.md)
+* ✂️ [`MODULE_7: Variant Filtration`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_7_VARIANT_FILTRATION.md)
+* 🌳 [`MODULE_8: Phylogenomics & Matrices`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_8_PHYLOGENY.md)
 
 ---
 
