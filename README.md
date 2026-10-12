@@ -180,7 +180,7 @@ For in-depth technical specifications, process signatures, and I/O contracts, re
 * 📥 [`MODULE_1: Data Acquisition & Validation`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_1_DATA_ACQUISITION.md)
 * 🧹 [`MODULE_2: Read Filtration`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_2_FILTRATION.md)
 * 🗺️ [`MODULE_3: Mapping & Duplicate Marking`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_3_MAP_READS.md)
-* 📊 [`MODULE_4: Coverage Profiling`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_4_COVERAGE.md)
+* 📊 [`MODULE_4: Coverage Profiling`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_4_GENOME_COVERAGE.md)
 * 🧬 [`MODULE_5: Haplotype Calling`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_5_HAPLOTYPE_CALLING.md)
 * 🧩 [`MODULE_6: Joint Genotyping`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_6_JOINT_GENOTYPING.md)
 * ✂️ [`MODULE_7: Variant Filtration`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_7_VARIANT_FILTRATION.md)
