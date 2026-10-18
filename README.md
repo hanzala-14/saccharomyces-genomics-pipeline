@@ -12,7 +12,7 @@
 [![R](https://img.shields.io/badge/R-4.3+-276DC3?style=flat&logo=r&logoColor=white)](https://www.r-project.org/)
 [![Docker](https://img.shields.io/badge/Container-Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://docker.com)
 [![DOI](https://img.shields.io/badge/DOI-10.5281/zenodo.23289452-005EC6?style=flat)](https://doi.org/10.5281/zenodo.23289452)
-[![License](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-yellow?style=flat)](#license)
 
  [Pipeline Architecture](#pipeline-architecture) · [Quick Start](#quick-start) · [Configuration](#system-configuration) · [Module Documentation](#module-documentation)
 
