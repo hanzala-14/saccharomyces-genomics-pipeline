@@ -184,7 +184,7 @@ For in-depth technical specifications, process signatures, and I/O contracts, re
 * 🧬 [`MODULE_5: Haplotype Calling`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_5_HAPLOTYPE_CALLING.md)
 * 🧩 [`MODULE_6: Joint Genotyping`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_6_JOINT_GENOTYPING.md)
 * ✂️ [`MODULE_7: Variant Filtration`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_7_VARIANT_FILTRATION.md)
-* 🌳 [`MODULE_8: Phylogenomics & Matrices`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_8_PHYLOGENY.md)
+* 🌳 [`MODULE_8: Phylogenomics & Matrices`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_8_PHYLOGENOMICS.md)
 
 ---
 
