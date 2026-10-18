@@ -12,7 +12,7 @@
 [![R](https://img.shields.io/badge/R-4.3+-276DC3?style=flat&logo=r&logoColor=white)](https://www.r-project.org/)
 [![Docker](https://img.shields.io/badge/Container-Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://docker.com)
 [![DOI](https://img.shields.io/badge/DOI-10.5281/zenodo.23289452-005EC6?style=flat)](https://doi.org/10.5281/zenodo.23289452)
-[![License](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-yellow?style=flat)](#license)
 
  [Pipeline Architecture](#pipeline-architecture) · [Quick Start](#quick-start) · [Configuration](#system-configuration) · [Module Documentation](#module-documentation)
 
@@ -184,7 +184,7 @@ For in-depth technical specifications, process signatures, and I/O contracts, re
 * 🧬 [`MODULE_5: Haplotype Calling`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_5_HAPLOTYPE_CALLING.md)
 * 🧩 [`MODULE_6: Joint Genotyping`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_6_JOINT_GENOTYPING.md)
 * ✂️ [`MODULE_7: Variant Filtration`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_7_VARIANT_FILTRATION.md)
-* 🌳 [`MODULE_8: Phylogenomics & Matrices`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_8_PHYLOGENY.md)
+* 🌳 [`MODULE_8: Phylogenomics & Matrices`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_8_PHYLOGENOMICS.md)
 
 ---
 
