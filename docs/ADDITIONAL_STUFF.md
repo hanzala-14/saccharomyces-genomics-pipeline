@@ -6,7 +6,7 @@ Raw joint-genotyped VCFs are full of low-quality artifacts, false-positive SNPs,
 Knowing a variant is at position chrII:14520 is cool, but knowing that this mutation causes a missense amino acid change in a critical glucose-metabolization gene is what makes a paper publishable. Integrating SnpEff configured for the Saccharomyces cerevisiae reference genome will automatically annotate every variant with its biological impact (e.g., HIGH, MODERATE, LOW, MODIFIER).
 
 ## C. Cohort QC & MultiQC Integration
-Bringing all 16 chromosomes together into a final report using MultiQC will summarize transition/transversion (Ti/Tv) ratios, heterozygosity rates, and missingness per strain in a gorgeous interactive HTML report.
+Bringing all 16 chromosomes together into a final report using MultiQC will summarize transition/transversion (Ti/Tv) ratios, heterozygosity rates, and missingness per strain in a interactive HTML report.
 
 
 ### MERMAID CHART
