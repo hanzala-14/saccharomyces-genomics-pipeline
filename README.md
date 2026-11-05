@@ -1,6 +1,6 @@
-The updated `README.md` below incorporates the two-stage **Module 4 Coverage & Interactive Ploidy Curation** workflow (`lager_coverage_master.xlsx` + `--coverage_excel`), adds the Module 4 parameters to the `nextflow.config` block, and fixes the markdown links inside `git clone` and `LICENSE`:
 
-```markdown
+---
+
 # Saccharomyces Genomics Pipeline
 
 **A highly optimized Nextflow DSL2 workflow for population-scale WGS variant calling, interactive chromosomal coverage/ploidy curation, heterozygosity/ROH profiling, population nucleotide diversity, and phylogenomics of the *Saccharomyces sensu stricto* complex.**
