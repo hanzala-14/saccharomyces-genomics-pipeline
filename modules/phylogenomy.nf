@@ -10,7 +10,7 @@
  */
 process PREP_ALLELES {
     tag { "${strain_id} - Allele Prep" }
-    label 'low'
+    label 'phylogeny'
     
     // Publishes the tables cleanly categorized by strain cohort (if enabled in config)
     publishDir path: { "${params.outdir}/Phylogeny/Allele_Tables/${strain_id}" }, mode: 'symlink', enabled: params.keep_allele_tables
