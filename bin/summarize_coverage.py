@@ -78,7 +78,7 @@ def compute_dynamic_baseline(chrom_medians):
         if not c.endswith("_M") and not c.endswith("_P") and v > 0
     ]
     if not nuc_vals:
-        return 1.0, 1.0, []
+        return 1.0, []
 
     q75 = quantile_p(nuc_vals, 0.75)
     noise_cutoff = max(5.0, 0.20 * q75)
@@ -96,52 +96,10 @@ def compute_dynamic_baseline(chrom_medians):
         if not c.endswith(("_M", "_P")) and v >= noise_cutoff
     ]
 
-    g22_valter = float(statistics.median(sc_active)) if sc_active else (
+    g22_base = float(statistics.median(sc_active)) if sc_active else (
         float(statistics.median(all_active)) if all_active else 1.0
     )
-    g22_balint = float(statistics.median(all_active)) if all_active else 1.0
-    return g22_valter, g22_balint, kept_chroms
-
-
-def rolling_median_5(vals):
-    n = len(vals)
-    out = [0.0] * n
-    for i in range(n):
-        w = sorted(vals[max(0, i - 2):min(n, i + 3)])
-        m = len(w)
-        out[i] = w[m // 2] if m % 2 == 1 else 0.5 * (w[m // 2 - 1] + w[m // 2])
-    return out
-
-
-def detect_breakpoints(chrom_windows, baseline):
-    breakpoints = []
-    if baseline <= 0:
-        return breakpoints
-    inv_base = 1.0 / baseline
-    for chrom, rows in chrom_windows.items():
-        if chrom.endswith(("_M", "_P")) or len(rows) < 10:
-            continue
-        covs = [r[2] * inv_base for r in rows]
-        norm_roll = rolling_median_5(covs)
-        n = len(norm_roll)
-        for i in range(5, n - 5):
-            left_med = sorted(norm_roll[i - 5:i])[2]
-            right_med = sorted(norm_roll[i:i + 5])[2]
-            diff = abs(right_med - left_med)
-            if diff >= 0.75 and (left_med >= 0.4 or right_med >= 0.4):
-                breakpoints.append({
-                    "chrom": chrom,
-                    "Window_Start": rows[i][0],
-                    "Window_End": rows[i][1],
-                    "Left_Norm_Depth": round(left_med, 3),
-                    "Right_Norm_Depth": round(right_med, 3),
-                    "Delta": round(right_med - left_med, 3)
-                })
-    dedup = []
-    for bp in breakpoints:
-        if not dedup or dedup[-1]["chrom"] != bp["chrom"] or (bp["Window_Start"] - dedup[-1]["Window_Start"]) > 25000:
-            dedup.append(bp)
-    return dedup
+    return g22_base, kept_chroms
 
 
 def build_subgenome_chart_xml(title_text, sheet_name, col_let, start_row, end_row, cached_vals, bar_hex_color, has_user_shapes=True):
@@ -456,7 +414,7 @@ def build_cols_xml(sheet_name, max_cols):
             f'<col min="2" max="{end_c}" width="15" customWidth="1"/>'
             f'</cols>'
         )
-    elif sheet_name in ("Baseline_QC_Metadata", "Chimeric_Breakpoints"):
+    elif sheet_name == "Baseline_QC_Metadata":
         end_c = max(2, max_cols)
         return f'<cols><col min="1" max="{end_c}" width="22" customWidth="1"/></cols>'
     else:
@@ -871,7 +829,6 @@ def main():
 
     species_map = parse_species_map(args.species_map)
     species_keys = list(species_map.keys())
-    os.makedirs("subgenome_rosters", exist_ok=True)
 
     raw_records = {}
     curated_records = {}
@@ -881,8 +838,6 @@ def main():
     canonical_windows = []
 
     meta_rows = [["Sample_ID", "G22_Baseline", "Default_G24_Ploidy", "Active_Chromosomes_Count", "Active_Chromosomes_Used"]]
-    bp_rows = [["Sample_ID", "chrom", "Window_Start", "Window_End", "Left_Norm_Depth", "Right_Norm_Depth", "Delta"]]
-    rosters = {k: [] for k in species_keys}
     all_chrom_set = set()
     samples = []
 
@@ -919,7 +874,7 @@ def main():
             else:
                 chrom_meds[c] = float(statistics.median([x[2] for x in w_list]))
 
-        g22_base, g22_all_nuc, kept_chrs = compute_dynamic_baseline(chrom_meds)
+        g22_base, kept_chrs = compute_dynamic_baseline(chrom_meds)
 
         eff_g24 = args.ploidy_multiplier
         if args.auto_adjust_ploidy and args.ploidy_multiplier == 2.0:
@@ -938,14 +893,6 @@ def main():
         g22_by_sample[sample_id] = round(g22_base, 4)
         g24_by_sample[sample_id] = eff_g24
 
-        for prefix in species_keys:
-            active_cnt = sum(
-                1 for c, v in chrom_meds.items()
-                if c.startswith(f"{prefix}_") and not c.endswith(("_M", "_P")) and v >= 5.0
-            )
-            if active_cnt >= 3:
-                rosters[prefix].append(sample_id)
-
         c_dict = {}
         for c, raw_val in chrom_meds.items():
             if c.endswith("_P"):
@@ -963,30 +910,16 @@ def main():
             len(kept_chrs), ",".join(kept_chrs)
         ])
 
-        for bp in detect_breakpoints(chrom_windows, g22_all_nuc):
-            bp_rows.append([
-                sample_id, bp["chrom"], bp["Window_Start"], bp["Window_End"],
-                bp["Left_Norm_Depth"], bp["Right_Norm_Depth"], bp["Delta"]
-            ])
-
     with open("default_ploidy_table.tsv", "w", newline="") as f:
         w = csv.writer(f, delimiter="\t")
         w.writerow(["Sample_ID", "G22_Baseline", "G24_Ploidy"])
         for s in samples:
             w.writerow([s, g22_by_sample[s], g24_by_sample[s]])
 
-    for prefix, s_list in rosters.items():
-        if s_list:
-            with open(f"subgenome_rosters/callable_samples_{prefix}.txt", "w") as out_f:
-                out_f.write("\n".join(sorted(s_list)) + "\n")
-
     all_chroms = sorted(all_chrom_set, key=lambda x: chrom_sort_key(x, species_keys))
     organellar_rows = [c for c in all_chroms if c.endswith(("_M", "_P"))]
     nuclear_rows = [c for c in all_chroms if not c.endswith(("_M", "_P"))]
     gathered_order = organellar_rows + nuclear_rows
-
-    with open("chimeric_breakpoints.tsv", "w", newline="") as f:
-        csv.writer(f, delimiter="\t").writerows(bp_rows)
 
     raw_med_rows = build_matrix_rows(samples, gathered_order, raw_records, 3)
 
@@ -1024,7 +957,6 @@ def main():
         else:
             chr_row_ranges[c][1] = w_idx
 
-    # Discover all present species prefixes (1..8 species)
     present_prefixes = [
         pref for pref in species_keys
         if any(f"{pref}_{rom}" in chr_row_ranges for rom in ROMAN_ORDER)
@@ -1054,7 +986,6 @@ def main():
         "LIVE DIAGRAMS UPDATE WHEN G20, G22, OR G24 CHANGES", "", ""
     ]
 
-    # Build dynamic 2-species-per-tier tables in Columns F:K for all present species (1 to 8 species)
     tiers = [present_prefixes[i:i + 2] for i in range(0, len(present_prefixes), 2)]
     tier_layout = []
 
@@ -1108,7 +1039,6 @@ def main():
                 ("__FORMULA__", f"G{r_num}/G$22*G$24", l_cn)
             ] + right_cells
 
-        # Organellar (Mitochondrium & 2-micron Plasmid) rows for this tier
         lm_r1, lm_r2 = chr_row_ranges.get(f"{left_p}_M", [2, 2])
         lp_r1, lp_r2 = chr_row_ranges.get(f"{left_p}_P", [2, 2])
         l_m_f = ("__FORMULA__", f"MEDIAN(D{lm_r1}:D{lm_r2})", 0.0) if f"{left_p}_M" in chr_row_ranges else 0.0
@@ -1131,7 +1061,6 @@ def main():
         side_panel[org_c1] = [f"{left_sp} mtDNA copy number / 1n", ("__FORMULA__", f"G{org_m1}/G$22", 0.0), ""] + r_m_cn
         side_panel[org_c2] = [f"{left_sp} plasmid copy number / 1n", ("__FORMULA__", f"G{org_m2}/G$22", 0.0), ""] + r_p_cn
 
-    # 8-Species Safe G22 Formula: Uses Cohort_Chromosome_Summary active baseline when G20 is used, or falls back to active median
     g22_formula = (
         f"IF(ISNUMBER(E2), IF(MEDIAN(G4:G19)>0, MEDIAN(G4:G19), MEDIAN(J4:J19)), "
         f"IFERROR(INDEX(Cohort_Chromosome_Summary!$B$2:${last_summary_col}$2, 1, "
@@ -1207,8 +1136,7 @@ def main():
         "Cohort_Chromosome_Summary": summary_formula_rows,
         "Raw_Chromosome_Medians": raw_med_rows,
         "Raw_Sliding_Windows": raw_win_rows,
-        "Baseline_QC_Metadata": meta_rows,
-        "Chimeric_Breakpoints": bp_rows
+        "Baseline_QC_Metadata": meta_rows
     }
     write_multi_sheet_xlsx(
         args.out_excel,

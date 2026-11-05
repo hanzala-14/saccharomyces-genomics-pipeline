@@ -4,8 +4,8 @@ nextflow.enable.dsl = 2
  * Module 4: Sliding-Window Coverage & Interactive Ploidy Curation
  * -------------------------------------------------------------------
  * - Stage 1 (WRITE_COVERAGE_SUMMARY): Aggregates sliding-window depths into `lager_coverage_master.xlsx`
- *   featuring an Interactive_Plotter sheet (with live embedded S. cerevisiae & S. eubayanus bar charts,
- *   dashed chromosome dividers, G20 Strain_ID auto-lookup, Column D manual paste, and live F5:K31
+ *   featuring an Interactive_Plotter sheet (with live embedded subgenome bar charts,
+ *   dashed chromosome dividers, G20 Strain_ID auto-lookup, Column E manual paste, and live F:K
  *   chromosome copy-number tables) plus a formula-driven Cohort_Chromosome_Summary sheet.
  * - Stage 2 (PLOT_COVERAGE): Reads the user-curated `lager_coverage_master.xlsx` to batch-render
  *   clean cohort karyograms (`karyograms/*.png` and `cohort_karyograms.pdf`).
@@ -49,9 +49,7 @@ process WRITE_COVERAGE_SUMMARY {
 
     output:
     path "lager_coverage_master.xlsx",  emit: excel
-    path "chimeric_breakpoints.tsv",    emit: breakpoints
     path "default_ploidy_table.tsv",    emit: ploidy_tsv
-    path "subgenome_rosters/*.txt",     emit: rosters, optional: true
 
     script:
     def auto_flag = auto_adjust ? "--auto-adjust-ploidy" : ""

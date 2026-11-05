@@ -31,7 +31,7 @@ Strictly adhering to GATK Best Practices, the pipeline is engineered to handle t
 - **Subgenome Routing:** Automatically parses chromosomal prefixes via a configurable `species_map` (`c`, `e`, `p`, `m`, `k`, `u`, `a`, `j`) to route subgenomes (e.g., *S. cerevisiae*, *S. eubayanus*, *S. uvarum*, *S. kudriavzevii*) into isolated master VCFs, preventing cross-contamination in hybrid strains.
 - **Dynamic Ploidy Resolution:** Utilizes a `ploidy_map` during GATK `HaplotypeCaller` execution to dynamically apply haploid models to mitochondrial (`_M`) and plasmid (`_P`) DNA while maintaining diploid models for nuclear chromosomes.
 - **Zero-I/O Alignment:** Prevents massive intermediate disk writes by piping BWA-MEM alignments directly into SAMtools coordinate sorting (`bwa mem | samtools view -Sb | samtools sort`).
-- **Two-Stage Interactive Coverage & Ploidy Curation:** Aggregates sliding-window read depths into a color-coded, formula-driven Master Excel Workbook (`lager_coverage_master.xlsx`) featuring live embedded subgenome bar charts (`Interactive_Plotter` & `Diagram2`), dynamic `G22` baseline and `G24` ploidy controls across 1–8 species, and automated chimeric breakpoint detection—followed by one-command batch karyogram rendering (`--coverage_excel`) once ploidies are curated.
+- **Two-Stage Interactive Coverage & Ploidy Curation:** Aggregates sliding-window read depths into a color-coded, formula-driven Master Excel Workbook (`lager_coverage_master.xlsx`) featuring live embedded subgenome bar charts (`Interactive_Plotter` & `Diagram2`), dynamic `G22` baseline and `G24` ploidy controls across 1–8 species, and per-haploid organellar copy-number normalization—followed by one-command batch karyogram rendering (`--coverage_excel`) once ploidies are curated.
 - **Incremental Joint Genotyping:** Features the ability to inject newly sequenced strains into historical `GenomicsDB` workspaces without the computational overhead of re-importing legacy data.
 - **Parallel Allele Ratio & ROH Profiling:** Streams filtered cohort VCFs in 8-chromosome parallel batches via `bcftools roh` and `bcftools query` to generate genome-wide B-Allele Frequency (BAF) and Loss of Heterozygosity (LOH/ROH) karyograms per strain and subgenome.
 - **Multi-Clade Nucleotide Diversity ($\pi$, $\theta_W$, Tajima's $D$):** Computes missing-data-aware sliding-window and chromosome-wide Nucleotide Diversity ($\pi$), Watterson's Theta ($\theta_W$), and Tajima's $D$, supporting single-pass stratification across user-defined clades (e.g., `Saaz`, `Frohberg`, `Hybrids`, `Novalager`).
@@ -199,7 +199,7 @@ Pipeline execution is centrally managed via `nextflow.config`. Key parameters al
 ```groovy
 params {
     // I/O & Execution
-    samplesheet              = 'samplesheet_new.csv'
+    samplesheet              = 'samplesheet.csv'
     outdir                   = 'results'
     batch_size               = 50            // Throttles RAM usage during GenomicsDB import
     ibs_block_rows           = 8192          // C++ Matrix RAM chunking
@@ -301,7 +301,7 @@ For in-depth technical specifications, process signatures, and I/O contracts, re
 * 🧬 [`MODULE_5: Haplotype Calling`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_5_HAPLOTYPE_CALLING.md)
 * 🧩 [`MODULE_6: Joint Genotyping`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_6_JOINT_GENOTYPING.md)
 * ✂️ [`MODULE_7: Variant Filtration`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_7_VARIANT_FILTRATION.md)
-* 📈 [`MODULE_7.5: Allele Ratio & ROH Profiling`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/v1/docs/MODULE_7_5_ALLELE_ROH.md)
+* 📈 [`MODULE_7.5: Allele Ratio & ROH Profiling`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_7_5_ALLELE_ROH.md)
 * 🌳 [`MODULE_8: Phylogenomics & Matrices`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_8_PHYLOGENOMICS.md)
 * 🔬 [`MODULE_9: Subgenome Divergence & Nucleotide Diversity`](https://github.com/hanzala-14/saccharomyces-genomics-pipeline/blob/main/docs/MODULE_9_SUBGENOME_DIVERSITY.md)
 
@@ -316,7 +316,3 @@ If this pipeline is utilized in your research, please cite the exact release ver
 ## License
 
 This software is released under the **MIT License**. See the [LICENSE](https://www.google.com/search?q=LICENSE) file for comprehensive details.
-
-```
-
-```
